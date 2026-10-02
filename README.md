@@ -1,0 +1,74 @@
+# BossZhipin-AutoTools
+
+**循序求职助手**：面向个人求职的本地 Web 工具，将 BOSS 直聘岗位采集、简历匹配、沟通草稿和人工跟进串起来，减少重复搜索与整理。
+
+采用列表＋详情抽屉，支持关键词定时搜索、岗位去重、详情续采、Word 简历导入、依据原文的 AI 匹配、招呼草稿与沟通记录。登录、验证码、联系 HR 和实际投递由本人完成。
+
+这是社区项目，与 BOSS 直聘及模型服务商无隶属或官方合作关系。当前发布版面向 **Windows**，尚非跨平台一键安装包。
+
+## 快速开始
+
+准备 [Git](https://git-scm.com/downloads)、[Node.js 24+](https://nodejs.org/)、[Python 3.10+](https://www.python.org/downloads/windows/) 和 Microsoft Edge。AI 功能还需要本机已配置可用服务的 Codex 原生 CLI。
+
+在 PowerShell 执行：
+
+```powershell
+git clone https://github.com/LiyuLiu8270/BossZhipin-AutoTools.git
+cd BossZhipin-AutoTools
+npm.cmd run setup
+npm.cmd start
+```
+
+安装过程会创建项目内 `.venv`，从 Python 包索引安装固定依赖，并使用 Windows 自带的 .NET Framework 编译托盘入口。不会自动安装或登录模型服务。未检测到 Python 时可指定现有解释器：
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/setup.ps1 -Python "C:\path\to\python.exe"
+```
+
+启动后浏览器打开 <http://127.0.0.1:17321/>，托盘可查看状态、打开页面或正常停止服务。也可双击项目根目录生成的 `循序求职助手.exe`；需要保留它与项目源码的相对位置。
+
+开发时可用 `npm.cmd run serve` 前台启动，`npm.cmd stop` 正常停止。请勿同时运行多个副本；服务端口17321、专用浏览器端口19222目前固定。已有服务占用时，先从该服务的原目录或托盘正常退出。
+
+## 使用流程
+
+1. **我的资料**：导入 `.docx` 简历，核对解析全文。支持岗位解析和简历评分；简历原文是匹配依据。
+2. **采集与任务**：维护关键词、城市代码、每日详情额度及可选定时计划。点击立即采集，在新打开的专用 Edge 中本人登录。
+3. **自动匹配**：确认愿意将简历文字与 JD 交给自己配置的模型服务后开启。匹配与招呼为独立任务，共享并发和每日模型额度。
+4. **岗位推荐**：筛选建议、薪资、招聘者活跃和采集状态，展开抽屉查看依据、缺口与沟通草稿。
+5. **人工沟通**：在已登录 Edge 中查看原岗位，自己联系 HR，再记录已沟通、待回复及后续进展。
+
+默认不开启定时采集和自动匹配。搜索结果按数据集与平台岗位身份去重；未完成详情可单独续采。登录、验证码、访问限制等情况会暂停等待人工处理。关闭网页不停止服务，休眠/关机期间不会运行。
+
+## AI 与个人资料
+
+本项目调用本机 Codex CLI，复用使用者已有的服务配置；不提供账号或 API Key。可通过 `CODEX_BINARY` 指定原生 CLI 路径。Windows 需要可直接执行的 `.exe`，只有命令包装脚本时应指定对应的原生程序。
+
+数据库、Word 原件、报告、日志和专用浏览器登录状态保存在 `local/data/`，已被 Git 忽略。开启模型功能后，JD 与遮蔽联系方式后的简历文字会发送给所配置的模型服务；姓名和经历仍可能识别本人，所以“本地软件”不代表离线推理或完全匿名。不要上传自己的数据目录或配置作为 Issue 附件。
+
+AI 输出只提供分析辅助，需人工核对；不承诺录用概率、HR 回复率或通用 ATS 分数。软件不会自动发送消息或投递附件。
+
+## 平台访问与已知限制
+
+- 使用者应遵守平台条款和适用法律，仅处理自己有权访问的数据；源码许可证不授予平台数据的再分发权。
+- 平台返回数量、页面结构和账号访问限制会变化，不能保证全量或持续无人值守。
+- 一次历史运行在单日约1000次详情访问附近出现约6小时访问限制。这是单次观察，**不是平台固定阈值，也不代表低于该数量安全**。见[访问限制观察记录](docs/BOSS访问限制观察记录.md)。
+- 出现限制应停止采集并按平台提示处理，不反复刷新或绕过验证。
+- 招聘者活跃标签是采集时证据，未知不等于不活跃；首次发现时间不等于发布时间。
+- 当前 Word 解析不含 OCR；模型调用计费由使用者配置的服务决定。
+
+## 开发与验证
+
+```powershell
+npm.cmd run doctor
+npm.cmd test
+npm.cmd run check
+.venv\Scripts\python.exe -X utf8 -m unittest discover -s tests -p "test_*.py"
+```
+
+测试使用合成资料、临时数据库及模型替身，不依赖私人简历或真实平台登录。`doctor` 只检查环境及固定上游文件校验值，不访问 BOSS 或调用模型。
+
+源码结构和当前约定见[产品与架构](docs/产品与架构.md)，字段语义见[字段契约](docs/字段契约.md)，参与开发见[贡献说明](CONTRIBUTING.md)。升级前应正常停服并备份私有数据；不要将运行中的 SQLite 主文件单独复制就视为一致性备份。
+
+## 开源许可与致谢
+
+本项目采用 [MIT License](LICENSE)。采集底层使用 [eatmoreduck/boss-zhipin-scraper](https://github.com/eatmoreduck/boss-zhipin-scraper)，随仓库保留固定版本的必要文件及原作者许可。详见[第三方来源与许可](THIRD_PARTY_NOTICES.md)。

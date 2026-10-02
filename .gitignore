@@ -1,0 +1,29 @@
+# Private user data and credentials
+/local/data/
+/local/candidate.json
+/runtime/
+.env
+.env.*
+!.env.example
+*.sqlite
+*.sqlite-*
+*.db
+*.db-*
+*.log
+*.jsonl
+*.pem
+*.key
+*.pfx
+*.docx
+*.pdf
+boss-jobs-*.json
+boss-capture-*.json
+# Installed runtimes and generated artifacts
+/.venv/
+/node_modules/
+/artifacts/
+/*.exe
+__pycache__/
+*.py[cod]
+.DS_Store
+Thumbs.db

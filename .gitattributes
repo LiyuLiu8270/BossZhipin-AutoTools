@@ -1,0 +1,10 @@
+* text=auto
+*.mjs text eol=lf
+*.js text eol=lf
+*.py text eol=lf
+*.md text eol=lf
+*.json text eol=lf
+*.yml text eol=lf
+*.ps1 text eol=crlf
+# Preserve vendored bytes so SOURCE.json hashes survive clone/checkout.
+vendor/** -text -whitespace

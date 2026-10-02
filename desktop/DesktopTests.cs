@@ -1,0 +1,31 @@
+using System;
+using System.Threading;
+
+namespace Xunxu {
+    internal static class DesktopTests {
+        static int Main(string[] args) {
+            Console.OutputEncoding = new System.Text.UTF8Encoding(false);
+            try {
+                if (args[0] == "quote") { Console.Write(ServiceClient.Quote(args[1])); return 0; }
+                if (args[0] == "root") { Console.Write(Program.FindRoot(args[1])); return 0; }
+                var client = new ServiceClient(args[1], int.Parse(args[2]));
+                if (args[0] == "probe") { Console.Write(client.Healthy() ? "healthy" : "unverified"); return 0; }
+                if (args[0] == "stop") { client.Stop(); Console.Write("stopping"); return 0; }
+                if (args[0] == "start") {
+                    using (var child = client.Start()) {
+                        for (int i = 0; i < 30 && !client.Healthy(); i++) Thread.Sleep(100);
+                        if (!client.Healthy()) throw new Exception("fixture_not_ready");
+                        bool blocked = false;
+                        try { client.Start(); } catch (InvalidOperationException) { blocked = true; }
+                        if (!blocked) throw new Exception("duplicate_service");
+                        client.Stop();
+                        if (!child.WaitForExit(5000)) throw new Exception("fixture_not_stopped");
+                        Console.Write("started_hidden_duplicate_blocked_stopped:" + child.StartInfo.CreateNoWindow + ":" + child.StartInfo.UseShellExecute);
+                    }
+                    return 0;
+                }
+                throw new Exception("bad_test_command");
+            } catch (Exception e) { Console.Error.Write(e.GetType().Name + ":" + e.Message); return 1; }
+        }
+    }
+}

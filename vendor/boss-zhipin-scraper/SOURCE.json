@@ -1,0 +1,12 @@
+{
+  "repository": "https://github.com/eatmoreduck/boss-zhipin-scraper",
+  "commit": "46e2965de42c6c44a18021c1f8602a62b838297c",
+  "version": "2.3.0",
+  "license": "MIT",
+  "scope": "Unmodified runtime module, offline city data, requirements and license; upstream installers and workflows are not bundled.",
+  "sha256": {
+    "scripts/boss_cdp_raw.py": "45c31987a1f633c9c4c8a297dde7f017e401902da9613d5d6183e696abccede6",
+    "data/city_codes.json": "aac1ac55f4de892779ddbec0a41f3051d93e4f4fca2b19a9c2d724641ce8751c",
+    "LICENSE": "6f4ca9f66de8e24e00d25cf4441c168ac44e1370e626219016e39b72ac4a44a9"
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "type":"object","additionalProperties":false,"required":["results"],
+  "properties":{"results":{"type":"array","items":{
+    "type":"object","additionalProperties":false,
+    "required":["id","priority","reason","evidence","gaps","questions","greeting","greeting_fact_ids","keywords"],
+    "properties":{
+      "id":{"type":"string"},
+      "priority":{"type":"string","enum":["优先沟通","可以尝试","低优先级","不匹配"]},
+      "reason":{"type":"string"},
+      "evidence":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["fact_id","jd_quote","relation"],"properties":{"fact_id":{"type":"string"},"jd_quote":{"type":"string"},"relation":{"type":"string","enum":["直接经验","可迁移经验","缺口"]}}}},
+      "gaps":{"type":"array","items":{"type":"string"}},
+      "questions":{"type":"array","items":{"type":"string"}},
+      "greeting":{"type":"string","maxLength":0},
+      "greeting_fact_ids":{"type":"array","maxItems":0,"items":{"type":"string"}},
+      "keywords":{"type":"array","items":{"type":"string"}}
+    }
+  }}}
+}

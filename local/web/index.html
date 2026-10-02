@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>循序 · 求职助手</title><link rel="stylesheet" href="/styles.css"></head>
+<body>
+<div class="app-shell">
+ <aside class="sidebar">
+  <a class="brand" href="#recommend"><span class="brand-mark">循</span><span>循序<small>CAREER FLOW</small></span></a>
+  <p class="nav-label">我的求职空间</p>
+  <nav aria-label="主导航"><button data-view="recommend" class="active">☷ <span>岗位推荐</span></button><button data-view="tasks">◷ <span>采集与任务</span></button><button data-view="profile">♙ <span>我的资料</span></button><button data-view="settings">⚙ <span>设置</span></button></nav>
+  <div class="sidebar-note"><small>一步一步，更有方向</small><p>先看清匹配，<br>再决定下一步。</p><div class="gold-line"></div></div>
+  <div class="sidebar-foot">本地求职助手 <small>人工沟通 · 不自动投递</small></div>
+ </aside>
+ <div class="workspace">
+  <header class="topbar"><span>求职空间 <i>/</i> <strong id="crumb">岗位推荐</strong></span><span id="connection" class="badge">正在连接本地服务</span></header>
+  <div id="global-error" role="alert" hidden></div>
+  <main>
+   <section id="view-recommend" class="view">
+    <div class="heading"><div><small class="eyebrow">YOUR NEXT MOVE</small><h1>让每个机会，都有下一步</h1><p>集中看岗位，展开看依据。沟通由你决定，记录留在本地。</p></div><button class="primary" data-goto="tasks">管理采集与分析 ↗</button></div>
+    <div class="summary-line" aria-label="岗位总览">
+     <div class="summary-group" role="group" aria-label="采集进度"><span class="summary-label">采集进度 · 互斥统计</span><button type="button" data-summary="total" aria-pressed="false">已收录 <b id="count-total">—</b></button><span aria-hidden="true">＝</span><button type="button" data-summary="details" aria-pressed="false" title="已取得正文且未确认关闭或链接不可用；短正文也计入。关闭岗位的旧正文仍保留，不在此重复计数。">已采集 <b id="count-details">—</b></button><span aria-hidden="true">＋</span><button type="button" id="summary-job-closed" data-summary="job-closed" aria-pressed="false" title="已关闭＋链接不可用；链接不可用不等于确认停招。">岗位已关闭 <b id="count-job-closed">—</b></button><span id="awaiting-plus" aria-hidden="true" hidden>＋</span><button type="button" id="summary-awaiting" data-summary="awaiting" aria-pressed="false" hidden title="尚无正文且未确认关闭或链接不可用，包含待采、等待重试、待人工检查和未入队。">待采详情 <b id="count-awaiting">—</b></button></div>
+     <div class="summary-group" role="group" aria-label="沟通建议"><span class="summary-label">沟通建议</span><button type="button" data-summary="优先沟通" aria-pressed="false">优先沟通 <b id="count-priority">—</b></button><button type="button" data-summary="可以尝试" aria-pressed="false">可以尝试 <b id="count-try">—</b></button><button type="button" data-summary="低优先级" aria-pressed="false">低优先级 <b id="count-low">—</b></button><button type="button" data-summary="不匹配" aria-pressed="false">不匹配 <b id="count-mismatch">—</b></button><button type="button" data-summary="pending" aria-pressed="false" title="包括未分析、缺详情、分析失败等暂无有效匹配结果的岗位">尚无建议 <b id="count-pending">—</b></button></div>
+     <div class="summary-group" role="group" aria-label="沟通进度"><span class="summary-label">沟通进度</span><button type="button" data-summary="contacted" aria-pressed="false">已沟通 <b id="count-contacted">—</b></button><button type="button" data-summary="waiting" aria-pressed="false" title="已沟通中人工标记为等待招聘者回复的岗位">待回复 <b id="count-waiting">—</b></button></div>
+     <span id="analysis-brief">正在读取分析状态</span>
+    </div>
+    <p id="detail-breakdown" class="help" aria-live="polite">正在读取详情状态分布</p>
+    <p class="help summary-help">总览按所选数据集统计，不随下方其他条件变化。点击数字切换到对应岗位（清除其他条件，保留数据集与排序）；待回复包含在已沟通中，回复状态由你维护。</p>
+    <div class="filter-bar">
+     <label class="search">搜索岗位<input id="search" type="search" placeholder="岗位名称、公司或地区"></label>
+     <label>数据集<select id="dataset"><option value="">全部数据集</option></select></label>
+     <label>月薪范围<select id="salary-filter" title="岗位薪资与所选区间有交集即保留；额外薪数不折算月薪"><option value="">全部薪资</option><option value="under10">10K 以下</option><option value="10-15">10–15K</option><option value="15-20">15–20K</option><option value="20-30">20–30K</option><option value="30-50">30–50K</option><option value="50plus">50K 及以上</option><option value="unknown">面议 / 未知 / 非月薪</option></select></label>
+     <label>匹配建议<select id="priority"><option value="">全部建议</option><option>优先沟通</option><option>可以尝试</option><option>低优先级</option><option>不匹配</option><option value="pending">尚无匹配结果</option></select></label>
+     <label>处理阶段<select id="stage"><option value="">全部阶段</option><option value="new">待评估</option><option value="saved">准备沟通</option><option value="contacted">已沟通</option><option value="followup">后续跟进</option><option value="ignored">暂不考虑</option></select></label>
+     <label>沟通记录<select id="contact-filter"><option value="">全部</option><option value="unknown">未知 · 待核对</option><option value="not_contacted">人工确认未沟通</option><option value="contacted">已沟通</option></select></label>
+     <label>详情采集<select id="detail-filter"><option value="">全部详情状态</option><option value="ready">正文已采集（含历史关闭岗位）</option><option value="missing">正文未采集（含关闭／不可用）</option><option value="unfinished">待采详情（排除关闭／不可用）</option><option value="pending">可立即采集</option><option value="waiting_retry">等待重试</option><option value="review">待人工检查</option><option value="unqueued">未入采集队列</option></select></label>
+     <label>岗位状态<select id="availability-filter"><option value="">全部岗位状态</option><option value="terminal">已关闭＋链接不可用</option><option value="closed">已关闭</option><option value="unavailable">链接不可用</option><option value="unknown">未确认关闭／不可用</option></select></label>
+     <label>回复状态<select id="reply-filter"><option value="">全部回复状态</option><option value="waiting">待回复</option><option value="replied">已回复</option><option value="closed">已结束</option><option value="unknown">已沟通 · 回复未记录</option></select></label>
+     <label>排序<select id="sort"><option value="match">匹配建议优先</option><option value="recent">最近接收优先</option></select></label>
+     <label>招聘者活跃<select id="activity-filter" title="按采集时标签等级累计筛选：本周含在线、刚刚、今日、3日内；本月再含本周与2周内。日历周/月不换算精确上线日期。包含标注为历史的证据，不代表当前在线；未知与模糊标签独立。"><option value="">全部活跃状态</option><option value="state:unknown">未知 / 未采到</option><option value="state:historical">仅历史记录</option></select></label>
+    </div>
+    <div class="list-wrap"><table><thead><tr><th>岗位 / 招聘方</th><th>薪资 / 地区</th><th>匹配建议</th><th>处理与沟通</th><th>招聘者活跃</th><th>详情</th></tr></thead><tbody id="jobs"></tbody></table><div id="list-empty" class="empty" hidden><span>☷</span><h2>这里还没有岗位</h2><p>连接采集器或导入采集 JSON 后，岗位会进入这个列表。</p><button data-goto="tasks">前往采集与任务</button></div></div>
+    <div class="pagination"><span id="page-summary">正在读取</span><div><button id="prev">上一页</button><button id="next">下一页</button></div></div>
+    <p class="footnote">活跃筛选包含更近期等级：本周含在线、刚刚、今日、3日内；本月再含本周、2周内。依据采集时标签，历史证据保留标注，不代表当前在线。匹配建议不代表录用概率，未知沟通状态不等于未沟通。</p>
+   </section>
+   <section id="view-tasks" class="view" hidden>
+    <div class="heading"><div><small class="eyebrow">COLLECTION & ANALYSIS</small><h1>每一步，都看得见</h1><p>定时搜索 → 自动入库去重 → JD 匹配 → 推荐结果。沟通仍由你决定。</p></div><button id="refresh-tasks">刷新状态</button></div>
+    <div class="panel"><div class="panel-title"><h2>BOSS 自动采集</h2><span class="badge" id="collection-status">正在读取</span></div>
+     <form id="collection-form"><div class="filter-bar">
+      <label>保存到数据集<input id="collection-dataset" maxlength="40" required></label>
+      <label>城市代码<input id="collection-city" pattern="[0-9]{9}" title="BOSS 城市代码，深圳为 101280600" required></label>
+      <label>每个关键词搜索页数<input id="collection-pages" type="number" min="1" max="20" required></label>
+      <label>每天详情上限<input id="collection-details" type="number" min="1" step="1" required></label>
+      <label>采集间隔（分钟）<input id="collection-interval" type="number" min="15" max="10080" required></label></div>
+      <label class="check-label"><input id="collection-enabled" type="checkbox"> 启用定时采集</label>
+       <div class="actions"><button type="submit">保存采集设置</button><button type="button" class="primary" id="collection-resume" disabled>恢复上次任务</button><button type="button" id="collection-start">立即采集</button><button type="button" id="collection-detail-start">立即采集详情</button><button type="button" id="collection-retry-search" disabled>重试不完整关键词</button><button type="button" id="collection-backfill">补齐缺失字段</button><button type="button" id="collection-stop">停止本轮</button><button type="button" id="collection-retry">重排失败详情</button></div>
+       <p class="help" id="collection-budget">正在读取今日详情额度</p>
+       <p class="help" id="collection-resume-help">重新登录后点“恢复上次任务”：跳过已完成关键词，从未完成详情继续；“立即采集”会启动新一轮全部关键词搜索。搜索中断的当前关键词会重新搜索并去重，不承诺跨页面精确续翻。</p>
+     </form><p class="description" id="collection-progress"></p><p class="help" id="collection-next"></p>
+       <p class="help">使用下方已启用的关键词及专用 Edge 登录态，不依赖原扩展。“立即采集”搜索新岗位并补缺失 JD；“补齐缺失字段”处理尚未采集或待复查的公司和招聘者活跃字段，不覆盖原 JD 或投递记录。确认页面未展示活跃标签的，记为已处理，不再重复补采；遇到登录或验证会暂停。请勿关闭采集页。</p>
+     <p class="help">关闭网页不停止任务；本地服务、电脑和网络必须保持运行。休眠恢复不追赶所有错过的轮次。登录或验证异常会暂停定时执行，请在专用 Edge 处理后点“恢复上次任务”，仍有门禁则再次暂停。新发现不代表新发布，搜索页数也不保证平台全量。</p>
+     <div class="list-wrap"><table><thead><tr><th>开始 / 触发</th><th>结果</th><th>岗位 / 新增 / 详情</th><th>说明</th></tr></thead><tbody id="collection-history"></tbody></table></div>
+    </div>
+    <div class="panel"><h2>招聘者活跃补采</h2><p id="activity-collection" class="description">正在读取</p><p class="help">点击上方“补齐缺失字段”，使用专用 Edge 逐岗处理尚未采集或待复查的字段，每条结果立即入库。“区块已加载、等待结束但未展示标签”也是有效采集结果，计为已处理并退出默认补采队列；旧数据已有该状态的同样跳过。</p><p class="help">只补状态与观察时间，不覆盖JD、沟通记录或重复AI分析。不仅凭猎头、代招身份跳过采集；须先核实页面。未展示时活跃度仍为未知，不推断不活跃；页面加载失败或标签未识别仍待复查。</p></div>
+    <div class="panel"><div class="panel-title"><h2>自动匹配</h2><span class="badge" id="worker-status">读取中</span></div><p class="description">先固定匹配结论，再独立生成沟通草稿；两个阶段共用并发令牌池，一条完成即补入下一条。</p><p id="model-concurrency-status" class="help"></p><p id="hr-activity-status" class="help"></p><button type="button" data-goto="settings">设置 HR 活跃条件</button><h3>匹配队列</h3><div id="queue-states" class="status-list"></div><h3>招呼队列</h3><div id="greeting-queue-states" class="status-list"></div><p id="budget" class="help"></p><div class="actions"><button id="toggle-analysis" class="primary">读取中</button><button id="retry">重试失败任务</button></div><p class="help">暂停后已运行的任务自然完成，不再补入新任务。匹配、招呼及失败重试分别占用每日模型任务额度，不会向 HR 发送消息。</p></div>
+    <div class="panel"><div class="panel-title"><h2>搜索关键词</h2><span class="badge">已连接自动采集</span></div><form id="keyword-form" class="inline-form"><input id="keyword-input" aria-label="搜索关键词" maxlength="60" placeholder="输入岗位搜索词"><button type="submit">添加</button><button type="button" id="copy-keywords">复制启用词</button></form><div id="keyword-list" class="keyword-list"></div><h3>分析建议的关键词</h3><p class="help">点击“加入”才保存到清单，不会自动扩大搜索范围。</p><div id="keyword-suggestions" class="keyword-list"></div><p class="help">下次手动或定时采集使用已启用的关键词。本轮任务使用启动时的清单，修改不打断当前采集。</p></div>
+   </section>
+   <section id="view-profile" class="view" hidden>
+    <div class="heading"><div><small class="eyebrow">YOUR FOUNDATION</small><h1>完整经历，从原始简历开始</h1><p>导入 Word，保留经历、项目和成果的完整文字，不压缩成摘要。</p></div><span class="badge">以简历原文为准</span></div>
+    <section class="panel" aria-labelledby="resume-import-title"><h2 id="resume-import-title">导入 Word 简历</h2><p class="description">支持 .docx，最大 10 MB。原文件与解析全文一起保存，重复文件不会新增副本；导入新版不会删除旧版文件。</p><label class="file-label">选择 Word 简历<input id="resume-file" type="file" accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document"></label><div class="actions"><button id="resume-import" type="button" class="primary">导入并保存</button><button id="resume-original" type="button" disabled>下载已保存的原文件</button></div><p id="resume-feedback" role="status" class="description">请选择文件后导入。</p><p class="notice">岗位匹配只使用当前简历全文，不再使用旧摘要。导入在本地解析，不调用模型；新版会成为新的匹配依据，旧版结果留库但不冒充新版结果。自动分析是否运行仍由你的设置决定。旧版 .doc 请先另存为 .docx，图片文字暂不做 OCR。</p></section>
+    <section class="panel" aria-labelledby="resume-ai-title"><h2 id="resume-ai-title">基于简历全文分析</h2><p class="description">调用本机现有 Codex 模型配置。手机号、邮箱会先遮蔽；不发送 Word 原文件，不以旧摘要补充经历。</p><div class="actions"><button id="resume-roles" type="button" class="primary" disabled>岗位解析</button><button id="resume-score" type="button" disabled>简历评分</button></div><p class="help">岗位解析：判断适合的岗位并将关键词去重追加到采集搜索清单，新增词默认启用，已有停用词保持停用。简历评分：从 HR 视角评价表达与证据质量，附改进建议。</p><p id="resume-ai-status" role="status" class="description">请先导入简历。</p><p class="help">评分是辅助诊断，不是 ATS 通过率、岗位录用概率或对个人能力的最终结论。结果仅针对解析文字；请结合原文人工核对。</p></section>
+    <section id="resume-roles-panel" class="panel" hidden><h2>适合岗位与搜索关键词</h2><div id="resume-roles-result"></div></section>
+    <section id="resume-score-panel" class="panel" hidden><h2>简历评价与改进建议</h2><div id="resume-score-result"></div></section>
+    <section class="panel" aria-labelledby="resume-preview-title"><div class="panel-title"><h2 id="resume-preview-title">解析全文</h2><span id="resume-state" class="badge">尚未导入</span></div><p id="resume-meta" class="description">导入后，可在这里核对解析内容。</p><ul id="resume-warnings" class="bullet-list"></ul><div id="resume-preview" class="resume-preview"><p class="help">尚无 Word 简历。原有匹配资料保留，不会被空内容覆盖。</p></div></section>
+   </section>
+   <section id="view-settings" class="view" hidden>
+    <div class="heading"><div><small class="eyebrow">MAKE IT YOURS</small><h1>按自己的节奏工作</h1><p>定义匹配方法与沟通风格，控制分析额度，明确哪些动作由系统做、哪些由你决定。</p></div></div>
+    <form class="panel settings" id="matching-policy-form">
+     <h2>简历匹配与打招呼</h2>
+     <p class="description">把你的判断方法和表达偏好交给模型。它们是任务指令，不是新增的简历经历；所有经历仍须有当前 Word 简历依据，草稿不会自动发送。</p>
+     <fieldset id="policy-fields" disabled>
+      <label for="matching-skill">简历匹配 Skill 文本</label>
+      <textarea id="matching-skill" rows="9" maxlength="20000" placeholder="可粘贴技能说明，例如：先拆解核心职责，再区分直接经验、可迁移能力与关键缺口；不要仅凭关键词重合判断。"></textarea>
+      <p class="help">支持纯文本或 Markdown，最多 20,000 字符。留空沿用系统默认匹配规则。不会读取文本提及的文件、执行脚本或访问链接。</p>
+      <label for="greeting-preset">打招呼风格预设</label>
+      <div class="policy-actions"><select id="greeting-preset" aria-label="打招呼风格预设"></select><button type="button" id="apply-greeting-preset">应用预设到文本框</button></div>
+      <label for="greeting-style">打招呼风格定义</label>
+      <textarea id="greeting-style" rows="5" maxlength="4000" placeholder="选择预设后可自由修改，也可以直接填写语气、长度、结构和禁用表达。"></textarea>
+      <p class="help">最多 4,000 字符。以文本框内容为准，选择预设不会立即覆盖文本；留空使用系统默认风格。</p>
+      <p class="policy-warning">只改打招呼风格：保留匹配结论，仅删除并重新生成草稿。修改匹配 Skill：重新匹配并生成草稿。岗位 JD、简历与人工记录不变；开启自动匹配后按每日额度处理，内容相同不重算。职责、数字和频次须有原文证据，草稿仍需人工核对。</p>
+      <div class="policy-actions"><button type="submit" class="primary" id="save-matching-policy">保存匹配与招呼设置</button><button type="button" id="reset-matching-policy">恢复默认（待保存）</button></div>
+     </fieldset>
+     <p id="policy-status" class="help" role="status">尚未加载设置。</p>
+     <button type="button" id="reload-matching-policy">重新读取已保存设置</button>
+    </form>
+    <form class="panel settings" id="settings-form"><h2>分析与运行</h2>
+     <fieldset><legend>HR 活跃条件</legend>
+      <label class="check-label"><input id="hr-activity-enabled" type="checkbox"> 跳过不活跃 HR</label>
+      <label>允许的活跃范围（天）<input id="hr-activity-days" type="number" min="0" max="3720" step="1" required value="7"></label>
+      <p class="help">由你定义：0＝在线 / 刚刚活跃，1＝今日及更近期，7＝本周及更近期，31＝本月及更近期；也可输入其他整数。超过范围的明确活跃标签会跳过。</p>
+      <label class="check-label"><input id="hr-activity-unknown" type="checkbox" checked> 仍处理未知 / 无法确定范围的活跃状态</label>
+      <label class="check-label"><input id="hr-activity-historical" type="checkbox"> 允许用仅有的历史标签判断范围</label>
+      <p class="help">按采集时标签等级判断，不推算当前最后上线日期。周按7天、月按31天；“近期活跃”等模糊标签按未知处理。历史标签启用后仍须满足范围。默认不开启跳过；保存后匹配与招呼领取均生效，不取消在途任务，不删除岗位或已有结果。放宽条件后自动回到可处理队列，不需重排失败。</p>
+     </fieldset>
+     <label>模型任务并发上限<input id="model-concurrency" type="number" min="1" max="16" step="1" required></label>
+     <p class="help">1–16，默认 1；匹配与招呼共用名额，每个请求处理一个岗位。任务结束立即归还令牌并补位，不等整批。调高立即补位；调低不强杀在途任务，待占用降到新上限再补位。仅控制自动匹配流程，不含手动简历评分/岗位解析。高并发会增加本机资源和模型限流风险。</p>
+     <label>每日模型任务上限<input id="daily-limit" type="number" min="1" step="1" required></label><p class="help">正整数，不设业务最大值。匹配、生成招呼各算一次任务，失败重试也计入；北京时间每日重置。旧版已用额度保留，不重新折算。单岗位独立调用可能增加重复简历输入成本。</p><label class="check-label"><input id="auto-analyze" type="checkbox"> 自动分析已接收的可读 JD</label><p class="help">岗位与简历全文将交给本机配置的模型服务，手机号、邮箱会先遮蔽。开启后，新结果自动进入推荐列表。</p><button type="submit" class="primary">保存运行设置</button><hr><h2>运行边界</h2><p class="description">关闭网页不停止本地服务。右键托盘选择“停止服务并退出”，将在所有在途任务结束后退出。尚未配置开机启动；重启电脑后需启动求职助手，登录过期需人工处理。</p><hr><h2>结果导出</h2><p class="description">导出当前资料版本对应的匹配结果及招呼草稿。这是报告，不是完整数据库备份。</p><button type="button" id="export-report">下载匹配报告 JSON</button></form>
+   </section>
+   <footer>循序 / 把求职进程理清楚 <span>人工决策 · 本地记录 · 证据优先</span></footer>
+  </main>
+ </div>
+</div>
+<dialog id="job-drawer" aria-labelledby="drawer-title"><div class="drawer-top"><small class="eyebrow">JOB DETAIL</small><button id="close-drawer" aria-label="关闭岗位详情">×</button></div><h2 id="drawer-title"></h2><p id="drawer-meta" class="description"></p><div class="actions"><button id="source-link" type="button">在已登录的 Edge 中打开 ↗</button><button id="copy-source-link" type="button">复制链接</button><span id="drawer-dataset" class="help"></span></div><p id="source-open-status" class="help" role="status">复用采集器专用 Edge 的登录态；若登录已过期，仍需在该窗口重新登录。</p><div class="tabs" role="tablist" aria-label="岗位详情"><button role="tab" data-tab="match" aria-selected="true">匹配分析</button><button role="tab" data-tab="jd" aria-selected="false">岗位原文</button><button role="tab" data-tab="record" aria-selected="false">沟通与记录</button></div>
+ <p id="drawer-job-state" class="notice" role="status"></p>
+ <section id="tab-match" role="tabpanel"><div id="match-content"></div></section>
+ <section id="tab-jd" role="tabpanel" hidden><div id="signals" class="notice"></div><h3>岗位描述</h3><div id="jd-text" class="prose"></div></section>
+ <section id="tab-record" role="tabpanel" hidden><p class="notice" id="contact-notice"></p><h3>打招呼草稿</h3><textarea id="greeting" rows="6" aria-label="打招呼草稿" readonly></textarea><button id="copy-greeting">复制草稿</button><p class="help">复制不会发送，也不会自动标记已沟通。发出前请核对历史沟通与经历表述。</p><hr><form id="action-form"><label>处理阶段<select id="action-stage"><option value="new">待评估</option><option value="saved">准备沟通</option><option value="contacted">已沟通</option><option value="followup">后续跟进</option><option value="ignored">暂不考虑</option></select></label><label>沟通状态<select id="action-contact"><option value="unknown">未知 · 先核对历史</option><option value="not_contacted">我已确认尚未沟通</option><option value="contacted">我已向招聘者发出沟通</option></select></label><label>回复状态<select id="action-reply"><option value="unknown">未记录</option><option value="waiting">待回复</option><option value="replied">已回复</option><option value="closed">已结束</option></select></label><p class="help">仅已沟通岗位可记录回复状态。新标记已沟通时预选“待回复”，保存后生效；历史记录不自动推断。不读取 BOSS 消息。</p><label>备注 / 下一步<textarea id="action-note" rows="4" maxlength="4000"></textarea></label><button type="submit" class="primary">保存沟通记录</button></form></section>
+</dialog>
+<div class="toast" id="toast" role="status" hidden></div><script src="/app.js"></script>
+</body></html>
