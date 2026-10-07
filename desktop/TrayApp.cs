@@ -86,14 +86,37 @@ namespace Xunxu {
         internal static string FindNode() {
             // Prefer a separately installed runtime, not an IDE-injected PATH runtime.
             string fallback = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "nodejs", "node.exe");
-            if (File.Exists(fallback)) return fallback;
+            var candidates = new List<string> { fallback };
             foreach (string raw in (Environment.GetEnvironmentVariable("PATH") ?? "").Split(';')) {
                 try {
                     string path = Path.Combine(raw.Trim().Trim('"'), "node.exe");
-                    if (Path.IsPathRooted(path) && File.Exists(path)) return path;
+                    candidates.Add(path);
                 } catch { }
             }
-            throw new InvalidOperationException("没有找到 Node.js。请安装 Node.js 24 或更高版本后重试。");
+            return FindNode(candidates, SupportedNode);
+        }
+        internal static string FindNode(IEnumerable<string> candidates, Func<string, bool> supported) {
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (string candidate in candidates) {
+                try {
+                    if (!Path.IsPathRooted(candidate) || !File.Exists(candidate)) continue;
+                    string path = Path.GetFullPath(candidate);
+                    if (seen.Add(path) && supported(path)) return path;
+                } catch { /* A broken candidate must not hide a later supported runtime. */ }
+            }
+            throw new InvalidOperationException("没有找到可用的 Node.js 24 或更高版本，请安装后重试。");
+        }
+        internal static bool SupportedNode(string node) {
+            try {
+                using (var check = Process.Start(new ProcessStartInfo(node, "--version") {
+                    UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true
+                })) {
+                    if (!check.WaitForExit(4000) || check.ExitCode != 0) return false;
+                    var match = Regex.Match(check.StandardOutput.ReadToEnd(), "^v(\\d+)\\.");
+                    int major;
+                    return match.Success && int.TryParse(match.Groups[1].Value, out major) && major >= 24;
+                }
+            } catch { return false; }
         }
         internal static string Quote(string value) {
             var result = new StringBuilder("\""); int slashes = 0;
@@ -109,14 +132,6 @@ namespace Xunxu {
             string script = Path.Combine(Root, "local", "automation.mjs");
             if (!File.Exists(script)) throw new InvalidOperationException("找不到服务文件，请将应用放回原工作目录。");
             string node = FindNode();
-            using (var check = Process.Start(new ProcessStartInfo(node, "--version") {
-                UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true
-            })) {
-                if (!check.WaitForExit(4000)) throw new InvalidOperationException("Node.js 启动检查超时。");
-                var match = Regex.Match(check.StandardOutput.ReadToEnd(), "^v(\\d+)\\.");
-                if (!match.Success || int.Parse(match.Groups[1].Value) < 24)
-                    throw new InvalidOperationException("需要 Node.js 24 或更高版本。");
-            }
             Directory.CreateDirectory(Path.Combine(Root, "local", "data"));
             var child = new Process { StartInfo = new ProcessStartInfo(node, Quote(script) + " serve") {
                 WorkingDirectory = Root, UseShellExecute = false, CreateNoWindow = true,

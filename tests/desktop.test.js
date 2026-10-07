@@ -17,6 +17,9 @@ test('Windows 托盘底层：中文路径、鉴权、无重定向、隐藏启动
   const run=(...args)=>exec(exe,args,{windowsHide:true,timeout:20000});
   try {
     await exec(compiler,['/nologo','/target:exe','/codepage:65001','/main:Xunxu.DesktopTests',`/out:${exe}`,'/r:System.Windows.Forms.dll','/r:System.Drawing.dll','/r:System.Web.Extensions.dll',join(root,'desktop/TrayApp.cs'),join(root,'desktop/DesktopTests.cs')],{windowsHide:true});
+    await t.test('old or broken installed runtime falls back to supported PATH candidate',async()=>{
+      assert.equal((await run('node-selection',exe,process.execPath)).stdout,'supported_fallback_deduped');
+    });
     let mode='healthy', stops=0, redirectHits=0;
     const server=createServer((req,res)=>{
       if(req.url==='/redirect-target'){redirectHits++;res.end('{}');return;}

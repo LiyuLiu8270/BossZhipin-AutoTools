@@ -8,6 +8,17 @@ namespace Xunxu {
             try {
                 if (args[0] == "quote") { Console.Write(ServiceClient.Quote(args[1])); return 0; }
                 if (args[0] == "root") { Console.Write(Program.FindRoot(args[1])); return 0; }
+                if (args[0] == "node-selection") {
+                    int checks = 0;
+                    string selected = ServiceClient.FindNode(new[] { "relative.exe", args[1], args[1].ToUpperInvariant(), args[2] }, delegate(string path) { checks++; return path == args[2]; });
+                    if (selected != args[2] || checks != 2) throw new Exception("node_selection_failed");
+                    selected = ServiceClient.FindNode(new[] { args[1], args[2] }, delegate(string path) { if (path == args[1]) throw new Exception("broken_candidate"); return true; });
+                    if (selected != args[2]) throw new Exception("node_fallback_failed");
+                    bool rejected = false;
+                    try { ServiceClient.FindNode(new[] { args[1] }, delegate(string path) { return false; }); } catch (InvalidOperationException) { rejected = true; }
+                    if (!rejected || !ServiceClient.SupportedNode(args[2])) throw new Exception("node_version_check_failed");
+                    Console.Write("supported_fallback_deduped"); return 0;
+                }
                 var client = new ServiceClient(args[1], int.Parse(args[2]));
                 if (args[0] == "probe") { Console.Write(client.Healthy() ? "healthy" : "unverified"); return 0; }
                 if (args[0] == "alerts") { if (!client.Healthy()) throw new Exception("not_healthy"); Console.Write(client.UnreadAlerts + ":" + client.LatestAlert); return 0; }
