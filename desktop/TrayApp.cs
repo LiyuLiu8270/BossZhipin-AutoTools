@@ -16,7 +16,7 @@ using System.Windows.Forms;
 
 [assembly: AssemblyTitle("循序 · 求职助手")]
 [assembly: AssemblyDescription("本地服务与托盘入口")]
-[assembly: AssemblyVersion("1.7.0.0")]
+[assembly: AssemblyVersion("1.7.1.0")]
 
 namespace Xunxu {
     internal static class Diagnostic {

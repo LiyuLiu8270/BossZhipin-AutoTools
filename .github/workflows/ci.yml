@@ -19,7 +19,9 @@ jobs:
       - name: Install and build
         shell: pwsh
         run: ./scripts/setup.ps1 -Python (Get-Command python).Source
-      - run: npm.cmd test
+      # Avoid competing Windows process-start/SQLite fixtures across test files.
+      # Individual tests still exercise multi-request concurrency and deadlines.
+      - run: node --test --test-concurrency=1 tests/*.test.js
       - run: npm.cmd run check
       - name: Python tests
         run: .venv/Scripts/python.exe -X utf8 -m unittest discover -s tests -p "test_*.py"

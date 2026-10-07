@@ -14,7 +14,8 @@ const profile={facts,target:'产品经理',boundaries:[]};
 const assessment=(jobs,priority='可以尝试')=>({results:jobs.map(j=>({id:j.id,priority,reason:'业务分析经验相关',evidence:[{fact_id:'C01',jd_quote:'企业服务需求调研',relation:'直接经验'}],gaps:['范围待确认'],questions:['主要场景？'],keywords:['B端产品经理'],greeting:'',greeting_fact_ids:[]}))});
 const greeting=()=>({greeting:'您好，我参与过企业服务需求调研，并推动平台上线。希望进一步了解这个岗位的业务场景和职责范围。',greeting_fact_ids:['C01'],claims:[{text:'参与过企业服务需求调研，并推动平台上线',fact_id:'C01',quote:'参与企业服务需求调研，推动平台上线'}]});
 function setup({count=1,runner=async(p,j)=>({output:assessment(j)}),greetingRunner=async()=>({output:greeting()})}={}){
- const dataDir=mkdtempSync(join(tmpdir(),'split-pipeline-')),store=new IntakeStore(join(dataDir,'jobs.sqlite')),worker=new MatchWorker(store,profile,{dataDir,runner,greetingRunner}),controller=new WebController(store,worker);
+ // Both runners are synthetic: readiness must not depend on an installed Codex.
+ const dataDir=mkdtempSync(join(tmpdir(),'split-pipeline-')),store=new IntakeStore(join(dataDir,'jobs.sqlite')),worker=new MatchWorker(store,profile,{dataDir,runner,greetingRunner,runtimeStatus:()=>({available:true})}),controller=new WebController(store,worker);
  store.importPayload({schema_version:2,label:'synthetic',exported_at:new Date().toISOString(),jobs:Array.from({length:count},(_,i)=>({id:`boss:split${i}`,url:`https://www.zhipin.com/job_detail/split${i}.html`,title:'B端产品经理',jd:'负责企业服务需求调研与产品设计，推动项目实施并与研发团队协作交付。'.repeat(8),jd_status:'captured_unverified'}))});
  return {store,worker,controller};
 }
