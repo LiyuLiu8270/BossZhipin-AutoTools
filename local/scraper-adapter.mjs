@@ -111,6 +111,8 @@ export function adaptScraper({list, details = [], label, timezoneOffset, details
       signals.detail = activity(detail.boss_active_status, detailAt, 'detail', identity.url, detailAt ? 'caller_detail_batch_time' : 'unknown');
     return {...identity, title: clean(raw.title), title_list_raw: raw.title,
       company, company_raw: String(raw.boss_name || ''), company_display_name: company,
+      ...(detail?.company_identity && detail.company_identity.source_url === identity.url ? {company_identity: structuredClone(detail.company_identity)} : {}),
+      ...(detail?.hiring_party ? {hiring_party: structuredClone(detail.hiring_party)} : {}),
       company_name_kind: /^某|某(?:大型|中型|小型|知名)/.test(company) ? 'anonymous_description' : 'display_name_unverified',
       salary: clean(raw.salary), salary_source: clean(raw.salary_source), location, locations: location ? [location] : [],
       company_scale: clean(raw.company_scale), company_stage: clean(raw.company_stage), company_industry: clean(raw.company_industry),
@@ -143,6 +145,12 @@ export function mergeScraperJob(old, incoming) {
     scraper_source: incoming.scraper_source, scraper_review: {state: 'needs_review', reason: 'title_conflict',
       expected_title: old.title, observed_title: incoming.title, observed_at: incoming.last_seen_at}};
   const result = {...old, scraper_source: incoming.scraper_source};
+  if (incoming.hiring_party) result.hiring_party = incoming.hiring_party;
+  if (incoming.company_identity && (!old.company_identity?.observed_at || incoming.company_identity.observed_at >= old.company_identity.observed_at)) {
+    const previous = old.company_identity, next = incoming.company_identity;
+    result.company_identity = previous?.state === 'platform_verified' && next.state === 'platform_verified' && previous.full_name !== next.full_name
+      ? {...next, state: 'conflict', previous_full_name: previous.full_name} : next.state === 'not_displayed' && previous?.state === 'platform_verified' ? previous : next;
+  }
   // A later detail batch may carry an older list snapshot. Do not roll back list fields.
   if (old.last_seen_at && incoming.last_seen_at < old.last_seen_at) {
     incoming = {...incoming};

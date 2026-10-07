@@ -28,6 +28,16 @@ function card(id, title = '测试岗位', visible = true) {
     .bind('a[href*="/job_detail/"]', new Element(title, {href: `/job_detail/${id}.html?securityId=secret`}));
 }
 
+test('岗位详情顺带提取工商全称，不用正文和推荐公司凑全称；多主体冲突',()=>{
+ const header=new Element().bind('h1',new Element('产品经理'));
+ const business=new Element('工商信息\n公司名称\n合成科技有限公司\n法定代表人\n测试').bind('h3',new Element('工商信息'));
+ const doc=documentFixture().bind('.job-banner',header).bind('.detail-section-item.business-info-box',business);
+ const got=run(doc,'/job_detail/test.html').jobs[0].company_identity;
+ assert.equal(got.full_name,'合成科技有限公司');assert.equal(got.source_kind,'job_detail');assert.equal(got.credit_code,'');
+ business.innerText+='\n公司名称\n另一个有限公司';assert.equal(run(doc,'/job_detail/test.html').jobs[0].company_identity.state,'conflict');
+ doc.bind('.detail-section-item.business-info-box');doc.body.innerText='工商信息\n公司名称\n正文伪造有限公司';assert.equal(run(doc,'/job_detail/test.html').jobs[0].company_identity.state,'not_displayed');
+});
+
 test('模拟列表：解析卡片、去重、排除隐藏卡片和安全参数', () => {
   const doc = documentFixture().bind('.job-card-wrapper', card('a'), card('a'), card('hidden', '隐藏', false), card('b'));
   const data = run(doc);

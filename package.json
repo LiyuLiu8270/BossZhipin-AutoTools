@@ -1,7 +1,7 @@
 {
   "name": "bosszhipin-autotools",
   "private": true,
-  "version": "0.13.0",
+  "version": "1.7.0",
   "description": "Local-first job collection, resume matching and outreach drafts for BOSS Zhipin",
   "license": "MIT",
   "repository": {"type": "git", "url": "https://github.com/LiyuLiu8270/BossZhipin-AutoTools.git"},

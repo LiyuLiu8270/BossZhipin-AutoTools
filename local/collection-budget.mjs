@@ -1,7 +1,7 @@
 import {readFileSync,existsSync} from 'node:fs';
 import {join} from 'node:path';
 
-export const detailGates=new Set(['verification_required','login_required','detail_page_changed','search_page_changed','browser_unavailable']);
+export const detailGates=new Set(['verification_required','login_required','search_page_changed','browser_unavailable']);
 export const collectionDay=time=>new Date(time+8*3600000).toISOString().slice(0,10);
 
 // One ledger for all datasets and all collector detail/backfill entry points.

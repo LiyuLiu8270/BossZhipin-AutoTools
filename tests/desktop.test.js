@@ -25,6 +25,7 @@ test('Windows 托盘底层：中文路径、鉴权、无重定向、隐藏启动
       if(mode==='foreign'){res.end(JSON.stringify({ok:true}));return;}
       if(mode==='denied'){res.writeHead(403);res.end('{}');return;}
       if(req.url==='/stop'){stops++;res.end(JSON.stringify({ok:true,status:'stopping_after_current_batch'}));return;}
+      if(mode==='alerts'){res.end(JSON.stringify({ok:true,states:[],daily_limit:200,communicationAlerts:{unread:2,latestId:'synthetic-event'}}));return;}
       res.end(JSON.stringify({ok:true,states:[],daily_limit:200}));
     });
     await new Promise(r=>server.listen(0,'127.0.0.1',r));
@@ -40,6 +41,7 @@ test('Windows 托盘底层：中文路径、鉴权、无重定向、隐藏启动
       await t.test('single authenticated graceful stop request',async()=>{
         assert.equal((await run('stop',project,port)).stdout,'stopping'); assert.equal(stops,1);
       });
+      await t.test('tray reads only alert count and event id from authenticated health',async()=>{mode='alerts';assert.equal((await run('alerts',project,port)).stdout,'2:synthetic-event');mode='healthy';});
     } finally { await new Promise(r=>server.close(r)); }
     await t.test('invalid token remains unreadable to service and no requests made',async()=>{
       writeFileSync(join(project,'local/data/service-token.txt'),'invalid');

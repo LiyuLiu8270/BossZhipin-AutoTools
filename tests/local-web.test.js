@@ -6,7 +6,7 @@ import {join} from 'node:path';
 import {request} from 'node:http';
 import {IntakeStore} from '../local/intake.mjs';
 import {MatchWorker} from '../local/worker.mjs';
-import {WebController} from '../local/web-controller.mjs';
+import {WebController,collectedAt} from '../local/web-controller.mjs';
 import {createWebHandler} from '../local/web-handler.mjs';
 import {createIntakeServer} from '../local/service.mjs';
 import {applyActivityCapture} from '../shared/activity.js';
@@ -14,7 +14,49 @@ import {Collector} from '../local/collector.mjs';
 const profile={source:'合成测试',target:'产品经理',facts:{C01:'企业服务需求调研'},boundaries:['不编造']};
 const capture=(title='产品经理',label='合成测试',at='2026-09-30T01:00:00Z')=>({schema_version:2,label,exported_at:at,jobs:[{id:'boss:test_one',url:'https://www.zhipin.com/job_detail/test_one.html',title,company:'',hiring_party:{type:'headhunter',evidence:[]},jd:'负责企业服务需求调研和产品设计，梳理复杂流程并推动研发交付。任职要求：有产品经理经验，能够独立完成业务分析。'.repeat(5),jd_status:'captured_unverified',contact_status:'unknown'}]});
 const runner=async(p,jobs)=>({output:{results:jobs.map(j=>({id:j.id,priority:'可以尝试',reason:'有直接经验',evidence:[{fact_id:'C01',jd_quote:'企业服务需求调研',relation:'直接经验'}],gaps:['待核实'],questions:['业务方向？'],greeting:'',greeting_fact_ids:[],keywords:['B端产品经理']}))}});
+test('采集时间取最近列表或详情观察，缺失不使用分析或发布时间',()=>{
+ assert.equal(collectedAt({last_seen_at:'2026-10-07T10:00:00+08:00',jd_observed_at:'2026-10-07T04:00:00Z'}),'2026-10-07T04:00:00.000Z');
+ assert.equal(collectedAt({last_seen_at:'2026-10-07T05:00:00Z',jd_observed_at:'bad'}),'2026-10-07T05:00:00.000Z');
+ assert.equal(collectedAt({published_at:'2026-10-07',analyzed_at:Date.now(),last_seen_at:''}),null);
+ const e=setup();try{e.store.importPayload(capture());const row=e.store.db.prepare('SELECT body FROM intake_jobs').get(),job=JSON.parse(row.body);job.last_seen_at='2026-10-07T01:00:00Z';job.jd_observed_at='2026-10-07T04:00:00Z';e.store.db.prepare('UPDATE intake_jobs SET body=?').run(JSON.stringify(job));assert.equal(e.controller.list(new URLSearchParams()).items[0].collected_at,'2026-10-07T04:00:00.000Z');}finally{e.store.close();}
+});
 function setup(){const dataDir=mkdtempSync(join(tmpdir(),'career-web-test-')),store=new IntakeStore(join(dataDir,'jobs.sqlite')),worker=new MatchWorker(store,profile,{dataDir,runner});return {store,worker,controller:new WebController(store,worker),dataDir};}
+
+test('工商别名搜索先于分页并叠加视图/薪资，缓存随新证据失效而不改写岗位',()=>{
+ const {store,worker,controller}=setup();try{
+  const input=capture(),companyURL='https://www.zhipin.com/gongsi/search_alias.html';
+  input.jobs=Array.from({length:32},(_,i)=>({...input.jobs[0],id:'boss:alias_'+i,url:`https://www.zhipin.com/job_detail/alias_${i}.html`,company:'SenseTime',hiring_party:{type:'unknown'},company_url:companyURL,salary:'20-30K'}));store.importPayload(input);
+  assert.equal(controller.list(new URLSearchParams({q:'商汤'})).total,0);
+  const identity={state:'platform_verified',source_kind:'job_detail',source_url:input.jobs[0].url,company_url:companyURL,full_name:'深圳市商汤科技有限公司'};
+  store.db.prepare("UPDATE intake_jobs SET body=json_set(body,'$.company_identity',json(?)) WHERE id=?").run(JSON.stringify(identity),input.jobs[0].id);
+  for(let i=0;i<2;i++){const q=store.db.prepare('SELECT fingerprint FROM intake_analysis_queue WHERE id=?').get(input.jobs[i].id);store.db.prepare('INSERT INTO match_runs(dataset,id,fingerprint,profile,state,updated,result) VALUES(?,?,?,?,?,?,?)').run(input.label,input.jobs[i].id,q.fingerprint,worker.profileHash,'completed',Date.now(),JSON.stringify({priority:'可以尝试'}));}
+  const before=store.db.prepare('SELECT body FROM intake_jobs ORDER BY id').all();
+  assert.equal(controller.list(new URLSearchParams({q:' 商汤 科技 ',page:'2'})).items.length,2);
+  assert.equal(controller.list(new URLSearchParams({q:'商汤',view:'recommended'})).total,2);
+  assert.equal(controller.list(new URLSearchParams({q:'商汤',salary:'50plus'})).total,0);
+  assert.equal(controller.list(new URLSearchParams({q:'ＳｅｎｓｅＴｉｍｅ'})).total,32);
+  const cached=controller._readCache.get('search-index').value;
+  controller.action({dataset:input.label,id:input.jobs[0].id,stage:'ignored',contact:'unknown',note:''});
+  assert.equal(controller.list(new URLSearchParams({q:'商汤',view:'recommended'})).total,1);assert.equal(controller._readCache.get('search-index').value,cached);
+  assert.deepEqual(store.db.prepare('SELECT body FROM intake_jobs ORDER BY id').all(),before);
+  store.db.prepare("UPDATE intake_jobs SET body=json_set(body,'$.company_identity.state','conflict') WHERE id=?").run(input.jobs[0].id);
+  assert.equal(controller.list(new URLSearchParams({q:'商汤'})).total,0);
+ }finally{store.close();}
+});
+
+test('快捷视图在分页前全量筛选，按数据集计数，普通待回复不算待办',async()=>{
+ const {store,controller}=setup();try{
+  const input=capture();input.jobs=Array.from({length:36},(_,i)=>({...input.jobs[0],id:'boss:view_'+i,url:'https://www.zhipin.com/job_detail/view_'+i+'.html'}));store.importPayload(input);
+  store.importPayload({...capture('其他数据集','另一个'),jobs:[input.jobs[35]]});
+  controller.action({dataset:input.label,id:input.jobs[0].id,stage:'contacted',contact:'contacted',reply:'waiting',note:''});
+  controller.communications={summaries:()=>({[JSON.stringify([input.label,input.jobs[35].id])]:{unread:1,status:'paused'},[JSON.stringify(['另一个',input.jobs[35].id])]:{unread:0,status:'unknown'}})};
+  const all=controller.list(new URLSearchParams({dataset:input.label}));assert.equal(all.total,36);assert.equal(all.items.length,30);assert.equal(all.views.attention,1);assert.equal(all.views.communicating,1);
+  const attention=controller.list(new URLSearchParams({view:'attention',dataset:input.label}));assert.equal(attention.total,1);assert.equal(attention.items[0].id,input.jobs[35].id);
+  const none=controller.list(new URLSearchParams({view:'attention',dataset:input.label,q:'不可能匹配'}));assert.equal(none.total,0);assert.equal(none.views.attention,1);
+  assert.equal(controller.list(new URLSearchParams('view=attention')).total,2);
+  assert.equal(store.db.prepare('SELECT count(*) AS n FROM ui_actions').get().n,1);
+ }finally{await controller.scheduler.close();store.close();}
+});
 
 test('推荐概览按数据集统计，不受其他筛选和分页影响，建议分组与当前结果一致',async()=>{
  const {store,controller,worker}=setup();try{
@@ -187,6 +229,13 @@ test('HTTP 页面、同源鉴权、CSRF 拒绝、导入、XSS 数据和退役扩
   assert.equal((await fetch(base+'/api/state')).status,403);
   assert.equal((await fetch(base+'/api/state',{headers})).status,200);
   assert.equal((await fetch(base+'/api/matching-policy')).status,403);
+  assert.equal((await fetch(base+'/api/greeting/regenerate',{method:'POST',body:'{}'})).status,403);
+  for(const endpoint of ['bulk-preview','bulk-regenerate']){
+   assert.equal((await fetch(base+'/api/greeting/'+endpoint,{method:'POST',headers:{...headers,Origin:'https://evil.example'},body:'{}'})).status,403);
+   assert.equal((await fetch(base+'/api/greeting/'+endpoint,{method:'POST',headers,body:'{}'})).status,400);
+  }
+  assert.equal((await fetch(base+'/api/greeting/regenerate',{method:'POST',headers:{...headers,Origin:'https://evil.example'},body:'{}'})).status,403);
+  assert.equal((await fetch(base+'/api/greeting/regenerate',{method:'POST',headers,body:JSON.stringify({dataset:'missing',id:'missing'})})).status,409);
   const policyUrl=base+'/api/matching-policy';
   assert.deepEqual((await(await fetch(policyUrl,{headers})).json()).policy,{matchingSkill:'',greetingStyle:''});
   assert.equal((await fetch(policyUrl,{method:'POST',headers:{...headers,Origin:'https://evil.example'},body:'{}'})).status,403);

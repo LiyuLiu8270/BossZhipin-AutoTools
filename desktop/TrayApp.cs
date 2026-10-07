@@ -16,7 +16,7 @@ using System.Windows.Forms;
 
 [assembly: AssemblyTitle("循序 · 求职助手")]
 [assembly: AssemblyDescription("本地服务与托盘入口")]
-[assembly: AssemblyVersion("0.13.0.0")]
+[assembly: AssemblyVersion("1.7.0.0")]
 
 namespace Xunxu {
     internal static class Diagnostic {
@@ -28,6 +28,8 @@ namespace Xunxu {
     internal sealed class ServiceClient {
         internal readonly string Root;
         internal readonly int Port;
+        internal string LatestAlert = "";
+        internal int UnreadAlerts;
         internal string Address { get { return "http://127.0.0.1:" + Port + "/"; } }
         internal ServiceClient(string root, int port) { Root = root; Port = port; }
         internal Dictionary<string, object> Request(string route, bool post) {
@@ -52,6 +54,13 @@ namespace Xunxu {
         internal bool Healthy() {
             try {
                 var data = Request("health", false);
+                object alerts;
+                if (data.TryGetValue("communicationAlerts", out alerts)) {
+                    var a = alerts as Dictionary<string, object>;
+                    if (a != null && a.ContainsKey("latestId") && a.ContainsKey("unread")) {
+                        LatestAlert = Convert.ToString(a["latestId"]); UnreadAlerts = Convert.ToInt32(a["unread"]);
+                    }
+                }
                 // The private token authenticates the pre-tray 0.10 service as well.
                 return data.ContainsKey("ok") && data["ok"] is bool && (bool)data["ok"]
                     && data.ContainsKey("states") && data.ContainsKey("daily_limit");
@@ -71,18 +80,19 @@ namespace Xunxu {
         internal void Stop() {
             var data = Request("stop", true);
             if (!data.ContainsKey("ok") || !Equals(data["ok"], true)
-                || !data.ContainsKey("status") || !Equals(data["status"], "stopping_after_current_batch"))
+                || !data.ContainsKey("status") || !(Equals(data["status"], "stopping_after_current_batch") || Equals(data["status"], "stopping_after_inflight")))
                 throw new InvalidOperationException("服务没有确认停止请求；未强制结束进程。");
         }
         internal static string FindNode() {
+            // Prefer a separately installed runtime, not an IDE-injected PATH runtime.
+            string fallback = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "nodejs", "node.exe");
+            if (File.Exists(fallback)) return fallback;
             foreach (string raw in (Environment.GetEnvironmentVariable("PATH") ?? "").Split(';')) {
                 try {
                     string path = Path.Combine(raw.Trim().Trim('"'), "node.exe");
                     if (Path.IsPathRooted(path) && File.Exists(path)) return path;
                 } catch { }
             }
-            string fallback = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "nodejs", "node.exe");
-            if (File.Exists(fallback)) return fallback;
             throw new InvalidOperationException("没有找到 Node.js。请安装 Node.js 24 或更高版本后重试。");
         }
         internal static string Quote(string value) {
@@ -115,7 +125,10 @@ namespace Xunxu {
             }};
             child.OutputDataReceived += delegate(object sender, DataReceivedEventArgs e) { Log("web-service.log", e.Data); };
             child.ErrorDataReceived += delegate(object sender, DataReceivedEventArgs e) { Log("web-service-error.log", e.Data); };
+            child.EnableRaisingEvents = true;
+            child.Exited += delegate { try { Diagnostic.Write(Root, "service_exit pid=" + child.Id + " code=" + child.ExitCode); } catch { } };
             child.Start(); child.BeginOutputReadLine(); child.BeginErrorReadLine();
+            Diagnostic.Write(Root, "service_start pid=" + child.Id + " node=" + node);
             return child;
         }
         readonly object logLock = new object();
@@ -136,6 +149,7 @@ namespace Xunxu {
         Process child;
         bool busy, stopping, exitWhenStopped, healthy, warned, disposed;
         int closedChecks;
+        string lastNotifiedAlert = "";
         DateTime stopStarted;
         string state = "正在连接服务…";
         internal TrayContext(string root, EventWaitHandle signal) {
@@ -153,6 +167,7 @@ namespace Xunxu {
             menu.Items.Add(new ToolStripSeparator()); menu.Items.Add(exitItem);
             tray = new NotifyIcon { Icon = icon, Text = "循序 · 求职助手", ContextMenuStrip = menu, Visible = true };
             tray.DoubleClick += async delegate { await OpenConsole(); };
+            tray.BalloonTipClicked += async delegate { await OpenConsole(); };
             timer = new System.Windows.Forms.Timer { Interval = 2000 };
             timer.Tick += async delegate {
                 if (busy) return;
@@ -183,6 +198,7 @@ namespace Xunxu {
         [DllImport("user32.dll")] static extern bool DestroyIcon(IntPtr handle);
         void SetState(string value) {
             if (disposed) return;
+            if (state != value) Diagnostic.Write(service.Root, "state=" + value);
             state = value; stateItem.Text = value;
             tray.Text = "循序 · " + value;
             try {
@@ -202,6 +218,10 @@ namespace Xunxu {
             busy = true; SetState("正在连接服务…");
             try {
                 healthy = await Task.Run(() => service.Healthy());
+                if (healthy && !stopping && service.UnreadAlerts > 0 && service.LatestAlert != lastNotifiedAlert) {
+                    lastNotifiedAlert = service.LatestAlert;
+                    tray.ShowBalloonTip(8000, "循序 · 沟通提醒", "有新的 HR 回复或沟通需要处理，点击打开控制台。", ToolTipIcon.Info);
+                }
                 if (!healthy) {
                     if (child != null && !child.HasExited)
                         throw new InvalidOperationException("服务进程仍在运行但暂未响应。请查看日志，不会重复启动。");
@@ -281,6 +301,7 @@ namespace Xunxu {
             } finally { busy = false; SetState(state); }
         }
         protected override void ExitThreadCore() {
+            Diagnostic.Write(service.Root, "tray_exit stopping=" + stopping + " ownsService=" + (child != null));
             disposed = true;
             timer.Stop(); timer.Dispose(); tray.Visible = false; tray.Dispose(); icon.Dispose();
             if (child != null) child.Dispose();
@@ -304,7 +325,10 @@ namespace Xunxu {
             using (var mutex = new Mutex(true, "Local\\XunxuJobAssistant17321", out created))
             using (var signal = new EventWaitHandle(false, EventResetMode.AutoReset, "Local\\XunxuJobAssistantOpen17321")) {
                 if (!created) { signal.Set(); return; }
-                try { Application.Run(new TrayContext(FindRoot(AppDomain.CurrentDomain.BaseDirectory), signal)); }
+                try {
+                    Diagnostic.Write(FindRoot(AppDomain.CurrentDomain.BaseDirectory), "tray_start pid=" + Process.GetCurrentProcess().Id + " version=" + Assembly.GetExecutingAssembly().GetName().Version);
+                    Application.Run(new TrayContext(FindRoot(AppDomain.CurrentDomain.BaseDirectory), signal));
+                }
                 catch (Exception e) {
                     try { Diagnostic.Write(FindRoot(AppDomain.CurrentDomain.BaseDirectory), "main: " + e.GetType().Name + " " + e.Message); } catch { }
                     MessageBox.Show("应用无法启动，请确认它仍在原工作目录，并检查本地服务日志。", "循序 · 求职助手", MessageBoxButtons.OK, MessageBoxIcon.Error);

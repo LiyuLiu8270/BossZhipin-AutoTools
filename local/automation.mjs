@@ -10,6 +10,10 @@ import {createWebHandler} from './web-handler.mjs';
 import {Collector} from './collector.mjs';
 import {JobOpener} from './job-opener.mjs';
 import {ResumeInsights} from './resume-insights.mjs';
+import {Communications} from './communication.mjs';
+import {CompanyResearch} from './company-research.mjs';
+import {installLifecycle} from './service-lifecycle.mjs';
+import {VERSION} from '../shared/core.js';
 
 const [command='serve',...args]=process.argv.slice(2), opts={};
 for(let i=0;i<args.length;i+=2){if(!['--file','--data','--limit','--daily-limit','--dataset','--id','--status','--resume-backfill'].includes(args[i])||!args[i+1])throw new Error('invalid_arguments');opts[args[i].slice(2)]=args[i+1];}
@@ -17,6 +21,7 @@ if(!['serve','stop','import','once','status','contact','retry'].includes(command
 if(opts['resume-backfill']!==undefined&&(command!=='serve'||!['true','false'].includes(opts['resume-backfill'])))throw new Error('invalid_resume_backfill');
 const dataDir=resolve(opts.data||fileURLToPath(new URL('./data/',import.meta.url)));
 mkdirSync(dataDir,{recursive:true});
+const lifecycle=command==='serve'?installLifecycle(dataDir,{version:VERSION}):()=>{};
 const profile={mode:'resume_missing',source:'尚未导入Word简历',facts:{}};
 const dailyLimit=Number(opts['daily-limit']||200), limit=Number(opts.limit||3);
 if(!Number.isSafeInteger(dailyLimit)||dailyLimit<1||!Number.isInteger(limit)||limit<1||limit>10)throw new Error('invalid_limit');
@@ -43,23 +48,28 @@ try{
     if(!existsSync(tokenPath))writeFileSync(tokenPath,randomBytes(32).toString('hex'),{flag:'wx',mode:0o600});
     const token=readFileSync(tokenPath,'utf8').trim();
     if(!/^[a-f0-9]{64}$/.test(token))throw new Error('invalid_service_token');
-    let stopped=false,wakeStop;const stop=()=>{stopped=true;controller.scheduler.stop();collector?.stop();wakeStop?.();};
-    server=createIntakeServer({worker,token,onStop:stop,webHandler:createWebHandler({controller})});
+    let stopped=false,wakeStop;const stop=(reason='api')=>{if(stopped)return;lifecycle('stop_requested',{reason});stopped=true;controller.scheduler.stop();controller.communications?.stop();controller.companyResearch?.stop();controller.modelQueue.stop();collector?.stop();wakeStop?.();};
+    server=createIntakeServer({worker,token,onStop:stop,webHandler:createWebHandler({controller}),communicationAlerts:()=>{const alerts=controller.communications?.notifications()||[];return {unread:alerts.length,latestId:alerts[0]?.id||''};}});
     await new Promise((ok,fail)=>{server.once('error',fail);server.listen(17321,'127.0.0.1',ok);});
     controller.resumeInsights=new ResumeInsights(controller);
     collector=new Collector(store,controller,{dataDir});controller.collector=collector;
     controller.jobOpener=new JobOpener(store,{dataDir});
+    controller.communications=new Communications(controller,{dataDir});controller.communications.start();
+    controller.companyResearch=new CompanyResearch(controller,{dataDir});controller.companyResearch.start();
     // Explicit upgrade resume: acquire the collection lock before an overdue timer can run.
     if(opts['resume-backfill']==='true'){collector.backfill();log({status:'backfill_resumed'});}
     log({status:'serving',address:'127.0.0.1:17321',report:join(dataDir,'reports','latest.md'),daily_limit:worker.dailyLimit});
+    lifecycle('service_ready');
     collectionTimer=setInterval(()=>{if(!stopped)collector.tick().catch(()=>log({status:'collection_scheduler_error'}));},1000);
     worker.render();
-    process.on('SIGINT',stop);process.on('SIGTERM',stop);
+    const interrupt=()=>stop('SIGINT'),terminate=()=>stop('SIGTERM');
+    process.on('SIGINT',interrupt);process.on('SIGTERM',terminate);
     controller.scheduler.onResult=result=>{if(!['idle','paused'].includes(result.status))log(result);};
+    controller.scheduler.onAvailable=()=>controller.companyResearch?.tick().catch(()=>{});
     controller.scheduler.start();
     if(!stopped)await new Promise(resolve=>{wakeStop=resolve;});
     await controller.scheduler.close();
     worker.flushReport();
-    process.off('SIGINT',stop);process.off('SIGTERM',stop);
+    process.off('SIGINT',interrupt);process.off('SIGTERM',terminate);
   }
-}finally{clearInterval(collectionTimer);await controller.scheduler.close();if(collector)await collector.close();await controller.resumeInsights?.close();if(server)await new Promise(r=>server.close(r));worker.flushReport();store.close();}
+}finally{clearInterval(collectionTimer);controller.companyResearch?.stop();controller.modelQueue.stop();await controller.scheduler.close();await controller.communications?.close();await controller.companyResearch?.close();if(collector)await collector.close();await controller.resumeInsights?.close();await controller.modelQueue.close();if(server)await new Promise(r=>server.close(r));worker.flushReport();store.close();lifecycle('shutdown_complete');}

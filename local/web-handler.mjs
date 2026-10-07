@@ -1,9 +1,10 @@
 import {randomBytes,timingSafeEqual} from 'node:crypto';
 import {readFileSync} from 'node:fs';
+import {researchMarkdown} from './company-research.mjs';
 
 export function createWebHandler({controller,port=17321}){
   const session=randomBytes(32).toString('hex'),origin=`http://127.0.0.1:${port}`;
-  const assets=new Map([['/',['index.html','text/html']],['/index.html',['index.html','text/html']],['/app.js',['app.js','text/javascript']],['/styles.css',['styles.css','text/css']]]);
+  const assets=new Map([['/',['index.html','text/html']],['/index.html',['index.html','text/html']],['/app.js',['app.js','text/javascript']],['/styles.css',['styles.css','text/css']],['/usability.css',['usability.css','text/css']]]);
   return async(req,res)=>{
     const url=new URL(req.url,origin);
     if(!assets.has(url.pathname)&&!url.pathname.startsWith('/api/'))return false;
@@ -31,6 +32,9 @@ export function createWebHandler({controller,port=17321}){
         else if(p==='/api/matching-policy')reply(200,controller.matchingPolicy());
         else if(p==='/api/jobs')reply(200,controller.list(url.searchParams));
         else if(p==='/api/job')reply(200,controller.detail(url.searchParams.get('dataset'),url.searchParams.get('id')));
+        else if(p==='/api/communication')reply(200,controller.communications.detail(url.searchParams.get('dataset'),url.searchParams.get('id')));
+        else if(p==='/api/company-research')reply(200,controller.companyResearch.detail(url.searchParams.get('dataset'),url.searchParams.get('id')));
+        else if(p==='/api/company-research/report'){const detail=controller.companyResearch.detail(url.searchParams.get('dataset'),url.searchParams.get('id'));reply(200,{markdown:researchMarkdown(detail),report:detail.report});}
         else if(p==='/api/profile')reply(200,controller.worker.profile);
         else if(p==='/api/profile/resume'){const doc=controller.resumeDocuments.current();reply(200,{document:doc?{...doc,matching_connected:controller.resumeOnly}:null});}
         else if(p==='/api/profile/insights')reply(200,controller.resumeInsights.status());
@@ -47,6 +51,14 @@ export function createWebHandler({controller,port=17321}){
         for await(const chunk of req){bytes+=chunk.length;if(bytes>max){reply(413,{error:'body_too_large'});req.destroy();return true;}parts.push(chunk);}
         const value=JSON.parse(Buffer.concat(parts).toString('utf8')||'{}');
         if(url.pathname==='/api/settings')reply(200,controller.saveSettings(value));
+        else if(url.pathname==='/api/greeting/regenerate')reply(202,controller.regenerateGreeting(value));
+        else if(url.pathname==='/api/greeting/bulk-preview')reply(200,controller.previewBulkGreetings(value));
+        else if(url.pathname==='/api/greeting/bulk-regenerate')reply(202,controller.regenerateBulkGreetings(value));
+        else if(url.pathname==='/api/communication')reply(200,controller.communications.action(value));
+        else if(url.pathname==='/api/communication/ack')reply(200,controller.communications.acknowledge(value));
+        else if(url.pathname==='/api/company-research/retry')reply(202,controller.companyResearch.retry(value));
+        else if(url.pathname==='/api/company-research/settings')reply(200,controller.companyResearch.config(value));
+        else if(url.pathname==='/api/communication/reconcile')reply(200,await controller.communications.reconcile(value));
         else if(url.pathname==='/api/matching-policy')reply(200,controller.saveMatchingPolicy(value));
         else if(url.pathname==='/api/job/open')reply(200,await controller.jobOpener.open(value));
         else if(url.pathname==='/api/collection/settings')reply(200,controller.collector.save(value));
@@ -65,6 +77,10 @@ export function createWebHandler({controller,port=17321}){
         else reply(404,{error:'not_found'});
       }else{req.resume();reply(405,{error:'method_not_allowed'});}
     }catch(e){
+      if(['research_busy','research_not_eligible','research_subject_unknown','invalid_research_settings'].includes(e.message)){reply(409,{error:e.message});return true;}
+      if(['greeting_busy','greeting_not_eligible'].includes(e.message)){reply(409,{error:e.message});return true;}
+      if(['invalid_greeting_scope','greeting_scope_changed'].includes(e.message)){reply(e.message==='greeting_scope_changed'?409:400,{error:e.message});return true;}
+      if(['invalid_communication','send_unknown','duplicate_peer','job_closed','communication_busy'].includes(e.message)){reply(409,{error:e.message});return true;}
       if(e.message==='contact_reply_conflict'){reply(400,{error:e.message});return true;}
       const error=['detail_daily_limit','collection_resume_unavailable','collection_search_retry_unavailable','invalid_matching_policy','analysis_busy','invalid_profile','invalid_settings','job_not_found','invalid_action','contact_stage_conflict','collection_busy','invalid_collection_settings','collection_keywords_required','invalid_job_link','job_open_busy','job_open_uncertain','browser_unavailable','resume_import_busy','resume_invalid_filename','resume_file_size','resume_docx_required','resume_invalid_docx','resume_archive_limit','resume_encrypted','resume_macro_unsupported','resume_no_text','resume_text_limit','resume_parse_timeout','resume_parse_failed','resume_parser_unavailable','resume_required','resume_only','resume_changed','insight_busy'].includes(e.message)?e.message:'request_failed';
       reply(['analysis_busy','job_open_busy'].includes(error)?409:error==='job_not_found'?404:400,{error});

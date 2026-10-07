@@ -1,11 +1,14 @@
-import {spawn} from 'node:child_process';
+import {spawn,execFile} from 'node:child_process';
+import {promisify} from 'node:util';
 import {mkdirSync} from 'node:fs';
-import {fileURLToPath} from 'node:url';
+import {loadSchemaSnapshot,materializeSchema} from './model-schema.mjs';
 import {randomUUID} from 'node:crypto';
+import {fileURLToPath} from 'node:url';
 import {diagnosticSignals,appendModelDiagnostic} from './model-diagnostics.mjs';
 import {resolveCodexExecutable} from './codex-executable.mjs';
 
 import {normalizePolicy} from './matching-policy.mjs';
+const MATCH_SCHEMA=loadSchemaSnapshot(new URL('./match-schema.json',import.meta.url));
 export {MATCHER_VERSION} from './matching-policy.mjs';
 export function promptFor(profile, jobs, policy={}) {
   return `你是程序中的岗位匹配函数，不是交互聊天，不要提问用户，不调用工具，不读文件，不运行命令，不联网。
@@ -28,12 +31,44 @@ INPUT_DATA_JSON:\n${JSON.stringify({candidate:profile,jobs})}`;
 // Uses the installed Codex and its existing provider configuration, never reads
 // or copies auth files. Shell is disabled; read-only sandbox remains enabled.
 export function runCodex(profile,jobs,{binary,cwd,timeoutMs=240000,spawnProcess=spawn,resolveBinary,policy={},diagnosticContext}={}) {
-  return runCodexJson(promptFor(profile,jobs,policy),{binary,cwd,timeoutMs,spawnProcess,resolveBinary,diagnosticContext,schemaPath:fileURLToPath(new URL('./match-schema.json',import.meta.url))});
+  return runCodexJson(promptFor(profile,jobs,policy),{binary,cwd,timeoutMs,spawnProcess,resolveBinary,diagnosticContext,schema:MATCH_SCHEMA});
 }
-export function runCodexJson(prompt,{binary,cwd,timeoutMs=240000,spawnProcess=spawn,resolveBinary,schemaPath,diagnosticContext={}}={}) {
+export function runCodexJson(prompt,{binary,cwd,timeoutMs=240000,spawnProcess=spawn,resolveBinary,schema,schemaPath,diagnosticContext={}}={}) {
+ if(schema)schemaPath=materializeSchema(schema,cwd);
+ return runCodexTask(prompt,{binary,cwd,timeoutMs,spawnProcess,resolveBinary,schemaPath,diagnosticContext,json:true});
+}
+// Plain final text, with the same transport and no-tools boundary as JSON tasks.
+export function runCodexText(prompt,{binary,cwd,timeoutMs=240000,spawnProcess=spawn,resolveBinary,diagnosticContext={}}={}) {
+ return runCodexTask(prompt,{binary,cwd,timeoutMs,spawnProcess,resolveBinary,diagnosticContext,json:false});
+}
+// Research gets one autonomous Codex task with an isolated public browser.
+// Matching, greeting and chat retain their no-tools contract.
+export async function runCodexResearch(prompt,options={}){
+ const settings=['features.shell_tool=false','features.apps=false','features.plugins=false','features.remote_plugin=false','features.browser_use=false','features.in_app_browser=false','features.computer_use=false'];
+ // Per-invocation isolation only. Never change the user's global config or
+ // expose MCP arguments/environment (which can contain credentials) in logs.
+ if(!options.spawnProcess||options.spawnProcess===spawn){
+  const executable=(options.resolveBinary||resolveCodexExecutable)({binary:options.binary});
+  try{
+   const {stdout}=await promisify(execFile)(executable.path,['mcp','list','--json'],{windowsHide:true,timeout:15000,maxBuffer:1024*1024});
+   const servers=JSON.parse(stdout);if(!Array.isArray(servers))throw Error('invalid');
+   for(const server of servers){
+    if(server.enabled===false)continue;
+    if(typeof server.name!=='string'||!/^[-a-zA-Z0-9_]+$/.test(server.name))throw Error('invalid');
+    // Desktop-injected stdio servers need a valid transport even when disabled.
+    // An inert command plus enabled=false avoids inheriting a signed-in browser.
+    if(server.transport?.type==='stdio')settings.push(`mcp_servers.${server.name}.command="__disabled_for_public_research__"`);
+    settings.push(`mcp_servers.${server.name}.enabled=false`);
+   }
+  }catch{throw Error('research_tool_isolation_failed');}
+ }
+ settings.push('mcp_servers.xunxu_public_browser='+`{command=${JSON.stringify(process.execPath)},args=[${JSON.stringify(fileURLToPath(new URL('./research-browser-mcp.mjs',import.meta.url)))}],cwd=${JSON.stringify(options.cwd)},enabled=true,required=true,startup_timeout_sec=20,tool_timeout_sec=60,enabled_tools=["browser_search","browser_open"]}`);
+ return runCodexTask(prompt,{...options,researchConfigArgs:settings.flatMap(s=>['-c',s]),json:false,webSearch:true,timeoutMs:options.timeoutMs??900000,diagnosticContext:{stage:'research'}});
+}
+function runCodexTask(prompt,{binary,cwd,timeoutMs=240000,spawnProcess=spawn,resolveBinary,schemaPath,diagnosticContext={},json=true,webSearch=false,onTrace,researchConfigArgs=[]}={}) {
   mkdirSync(cwd,{recursive:true});
   const requestId=/^[a-f0-9-]{36}$/.test(diagnosticContext.requestId||'')?diagnosticContext.requestId:randomUUID();
-  const stage=['matching','greeting'].includes(diagnosticContext.stage)?diagnosticContext.stage:'other';
+  const stage=['matching','greeting','research','communication','resume_score','resume_roles'].includes(diagnosticContext.stage)?diagnosticContext.stage:'other';
   const started=Date.now(),events=[];let diagnosticDropped=0,stderrTail='',stderrBytes=0;
   const observe=(source,value)=>{
     const signals=diagnosticSignals(value),same=events.find(e=>e.source===source&&JSON.stringify(e.categories)===JSON.stringify(signals.categories)&&JSON.stringify(e.http_status)===JSON.stringify(signals.http_status));
@@ -52,9 +87,9 @@ export function runCodexJson(prompt,{binary,cwd,timeoutMs=240000,spawnProcess=sp
     }catch(e){observe('resolve',e);write('call_finished',{outcome:'codex_binary_unavailable',elapsed_ms:Date.now()-started,events});return reject(new Error('codex_binary_unavailable'));}
     let child;
     try{child=spawnProcess(executable.path,['exec','--ephemeral','--skip-git-repo-check','-s','read-only','-C',cwd,'--json',
-      '--output-schema',schemaPath,'-c','features.shell_tool=false','-'],{windowsHide:true,stdio:['pipe','pipe','pipe']});}
+      ...(schemaPath?['--output-schema',schemaPath]:[]),'-c','features.shell_tool=false',...researchConfigArgs,'-'],{windowsHide:true,stdio:['pipe','pipe','pipe']});}
     catch(e){observe('spawn',e);write('call_finished',{outcome:'codex_start_failed',elapsed_ms:Date.now()-started,events});return reject(new Error('codex_start_failed'));}
-    let tail='',total=0,answer='',usage=null,done=false,turnDone=false,pendingError=null;
+    let tail='',total=0,answer='',usage=null,done=false,turnDone=false,pendingError=null;const webEvents=[];
     // Do not release the scheduler permit until this local process really closes.
     const fail=code=>{if(done||pendingError)return;pendingError=code;clearTimeout(timer);child.kill();};
     const timer=setTimeout(()=>fail('codex_timeout'),timeoutMs);
@@ -79,17 +114,27 @@ export function runCodexJson(prompt,{binary,cwd,timeoutMs=240000,spawnProcess=sp
         if(e.type==='item.completed'&&e.item?.type==='agent_message')answer=e.item.text;
         if(e.type==='turn.completed'){turnDone=true;usage=e.usage;}
         if(e.type==='turn.failed')return fail('codex_turn_failed');
-        if(['item.started','item.completed'].includes(e.type) && ['command_execution','mcp_tool_call','web_search','file_change'].includes(e.item?.type))return fail('unexpected_tool_use');
+        if(['item.started','item.completed'].includes(e.type)&&e.item?.type==='web_search'&&webSearch){
+          const trace={tool:'web_search',event:e.type,id:e.item.id||null,status:e.item.status||null,query:e.item.query||e.item.action?.query||null};webEvents.push(trace);write('research_native_tool',trace);try{onTrace?.(trace);}catch{}
+        }else if(webSearch&&['item.started','item.completed'].includes(e.type)&&e.item?.type==='mcp_tool_call'&&e.item.server==='xunxu_public_browser'&&['browser_search','browser_open'].includes(e.item.tool)){
+          let page;for(const c of e.item.result?.content||[]){if(c.type==='text')try{const p=JSON.parse(c.text);if(p.ok===true&&p.page?.text&&p.page?.url)page=p.page;}catch{}}
+          const succeeded=e.type==='item.completed'&&e.item.status==='completed'&&!e.item.error&&e.item.result?.isError!==true&&Boolean(page);
+          const trace={tool:e.item.tool,server:e.item.server,event:e.type,id:e.item.id||null,status:e.type==='item.started'?'in_progress':succeeded?'completed':'failed',url:succeeded?page.url:null};
+          webEvents.push(trace);write('research_browser_tool',trace);try{onTrace?.(trace);}catch{}
+        }else if(['item.started','item.completed'].includes(e.type) && ['command_execution','mcp_tool_call','web_search','file_change'].includes(e.item?.type)){
+          if(webSearch){const trace={tool:'blocked_tool',type:e.item.type,server:e.item.server||null,name:e.item.tool||null};write('research_native_tool_blocked',trace);try{onTrace?.(trace);}catch{}}
+          return fail('unexpected_tool_use');
+        }
       }
     });
     child.on('close',(code,signal)=>{
       if(done)return;done=true;clearTimeout(timer);
       if(stderrTail)observe('stderr',stderrTail);
       let output,outcome=pendingError||(code!==0||!turnDone||!answer?'codex_no_valid_completion':null);
-      if(!outcome)try{output=JSON.parse(answer);}catch{outcome='codex_invalid_json';}
+      if(!outcome)try{output=json?JSON.parse(answer):answer;}catch{outcome='codex_invalid_json';}
       write('call_finished',{outcome:outcome||'completed',binary_source:['path','override','desktop_install','test_process'].includes(executable.source)?executable.source:'unknown',elapsed_ms:Date.now()-started,exit_code:Number.isInteger(code)?code:null,signal:['SIGTERM','SIGKILL','SIGINT'].includes(signal)?signal:null,stdout_characters:total,stderr_bytes:stderrBytes,turn_completed:turnDone,answer_received:Boolean(answer),events,dropped_events:diagnosticDropped});
       if(outcome)return reject(new Error(outcome));
-      resolve({output,usage});
+      resolve({output,usage,...(webSearch?{webEvents}: {})});
     });
     child.stdin.end(prompt);
   });

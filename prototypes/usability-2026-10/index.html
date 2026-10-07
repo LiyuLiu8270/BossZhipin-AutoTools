@@ -1,0 +1,9 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>循序 · 交互原型对比</title><link rel="stylesheet" href="/style.css"></head>
+<body>
+<header class="prototype-bar"><span class="prototype-label">交互原型 <b>虚构数据 · 不会真实发送</b></span><nav aria-label="原型方案"><a href="/?v=a" data-variant="a">A 效率列表</a><a href="/?v=b" data-variant="b">B 待办优先</a><a href="/?v=c" data-variant="c">C 连续阅读</a></nav><button id="reset" class="quiet">重置演示</button></header>
+<div class="shell"><aside class="sidebar"><a class="brand" href="/">循<span>循序<small>CAREER FLOW</small></span></a><nav id="nav" aria-label="主导航"></nav><div class="sidebar-bottom"><span class="status-dot"></span> 演示环境<div>所有操作仅在本页模拟</div></div></aside>
+<main><header class="page-top"><div><span class="eyebrow" id="eyebrow"></span><h1 id="page-title"></h1></div><div id="page-actions"></div></header><div id="page"></div></main></div>
+<dialog id="drawer" aria-label="岗位详情"><div id="drawer-content"></div></dialog>
+<dialog id="filters" aria-labelledby="filter-title"><form method="dialog"><header><h2 id="filter-title">筛选岗位</h2><button aria-label="关闭筛选" value="cancel" class="icon">×</button></header><label>月薪范围<select id="salary"><option value="">全部薪资</option><option value="20">20K及以上有交集</option><option value="30">30K及以上有交集</option></select></label><label>招聘者活跃<select id="activity"><option value="">全部活跃情况</option><option value="week">本周及更近期</option><option value="unknown">未知 / 未展示</option></select></label><p class="muted">未知不代表不活跃；薪资按区间交集筛选。</p><footer><button id="clear-filters" type="button">清除条件</button><button id="apply-filters" type="button" class="primary">查看结果</button></footer></form></dialog>
+<div id="toast" role="status" hidden></div><script src="/app.js"></script></body></html>

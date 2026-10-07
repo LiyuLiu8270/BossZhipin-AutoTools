@@ -225,6 +225,16 @@ export function collectPage() {
     if (selected) job.company_evidence = {text: selected.name, raw_text: selected.text, selector: selected.selector};
     if (!job.location) job.location = first(document, locationSelectors);
     const sections = all(document, '.job-detail-section, .job-sec');
+    const business = [...new Set([...sections, ...all(document, '.detail-section-item.business-info-box')])].filter(el => /^工商信息$/.test(first(el, ['h3', 'h2', '.title'])));
+    job.company_identity = {state: 'not_displayed', source_url: safe.href, source_kind: 'job_detail', observed_at: new Date().toISOString()};
+    if (!party || !['headhunter', 'agency', 'conflicting'].includes(party.type)) {
+      const names = business.flatMap(el => [...text(el).matchAll(/(?:公司名称|企业名称)[：:]?\s*\n?\s*([^\n]+)/g)].map(m => m[1].trim()));
+      if (business.length === 1 && names.length === 1 && /(?:有限责任公司|股份有限公司|有限公司|合伙企业[（(].+[）)]|个人独资企业)$/.test(names[0]) && names[0].length <= 160) {
+        job.company_identity = {...job.company_identity, state: 'platform_verified', full_name: names[0], credit_code: '', quote: '公司名称：' + names[0], scope: '招聘平台岗位详情展示的工商主体，不等于劳动合同签约主体'};
+        const link=all(business[0],'a[href*="/gongsi/"]').map(a=>{try{const u=new URL(a.getAttribute('href'),safe);return u.origin===safe.origin&&/^\/gongsi\/[\w~.-]+\.html$/.test(u.pathname)?u.origin+u.pathname:null;}catch{return null;}}).filter(Boolean);
+        if(new Set(link).size===1)job.company_identity.company_url=link[0];
+      } else if (business.length) job.company_identity.state = 'conflict';
+    } else job.company_identity.state = 'agency_unknown';
     const section = sections.find(el => /^职位描述/.test(first(el, ['h3', 'h2', '.title'])));
     let jd = section ? first(section, ['.job-sec-text', '.text', '.job-detail-desc']) || text(section) : '';
     if (!jd) jd = first(document, ['.job-detail-section .job-sec-text', '.job-detail .job-sec-text', '.job-detail-body .job-sec-text']);

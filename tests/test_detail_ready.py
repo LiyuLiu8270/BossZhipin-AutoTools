@@ -18,7 +18,7 @@ class LoginError(ExtractionError):
 URL = 'https://www.zhipin.com/job_detail/abc.html'
 
 class DetailReadyTests(unittest.TestCase):
-    def run_detail(self, descriptions=None, status='captured', address=URL, after_address=None, truncated=False, close_error=False, ready='complete', login_wall=False):
+    def run_detail(self, descriptions=None, status='captured', address=URL, after_address=None, truncated=False, close_error=False, ready='complete', login_wall=False, extracted_url=URL, shared_url=URL):
         descriptions = descriptions or ['有效职位描述' * 40]
         calls, sleeps, indices = [], [], [-1]
         class Session:
@@ -38,10 +38,10 @@ class DetailReadyTests(unittest.TestCase):
                 if expression == 'capture':
                     indices[0] += 1
                     jd = descriptions[min(indices[0], len(descriptions)-1)]
-                    return json.dumps({'status': status, 'jobs': [{'url': URL, 'title': '产品经理', 'jd': jd, 'jd_truncated': truncated}]})
+                    return json.dumps({'status': status, 'jobs': [{'url': shared_url, 'title': '产品经理', 'jd': jd, 'jd_truncated': truncated, 'company_identity': {'state':'platform_verified', 'full_name':'合成有限公司', 'source_url': URL}}]})
                 if expression == 'extract':
                     jd = descriptions[min(indices[0], len(descriptions)-1)]
-                    return json.dumps({'url': URL, 'jd': jd, 'tags': ['需求分析']})
+                    return json.dumps({'url': extracted_url, 'jd': jd, 'tags': ['需求分析']})
                 if expression == 'document.readyState':
                     return ready
                 return True
@@ -68,6 +68,8 @@ class DetailReadyTests(unittest.TestCase):
         self.assertEqual(sleeps, [1, 1, 1])
         self.assertFalse(meta['detail_timing']['lazy_scroll'])
         self.assertTrue(payload[0]['jd'])
+        self.assertEqual(payload[0]['company_identity']['full_name'], '合成有限公司')
+        self.assertEqual(payload[0]['company_identity']['source_url'], URL)
         self.assertIn(('Target.closeTarget', {'targetId': 'owned'}), calls)
         self.assertFalse(any(c[0] in ('Page.reload', 'Input.dispatchMouseEvent') for c in calls))
 
@@ -101,6 +103,21 @@ class DetailReadyTests(unittest.TestCase):
         (payload,error,_),_,_=self.run_detail(status='job_unavailable')
         self.assertEqual(payload['status'], 'job_unavailable')
         self.assertIsNone(error)
+
+    def test_identity_log_distinguishes_blank_parse_url_from_actual_navigation(self):
+        for args, stage, actual, observed in [
+            ({'extracted_url':''}, 'extracted_url', URL, ''),
+            ({'shared_url':URL.replace('abc', 'wrong')}, 'shared_job_url', URL, URL.replace('abc','wrong')),
+            ({'after_address':URL.replace('abc','other')+'?securityId=SECRET'}, 'after_extract_location', URL.replace('abc','other'), URL.replace('abc','other')),
+        ]:
+            (payload,error,meta),_,_=self.run_detail(**args)
+            self.assertIsNone(payload)
+            self.assertEqual(error,'detail_page_changed')
+            self.assertEqual(meta['detail_identity']['stage'],stage)
+            self.assertEqual(meta['detail_identity']['actual_url'],actual)
+            self.assertEqual(meta['detail_identity']['observed_url'],observed)
+            self.assertEqual(meta['detail_identity']['expected_url'],URL)
+            self.assertNotIn('SECRET',json.dumps(meta))
 
     def test_short_jd_is_accepted_only_after_stable_ready_polls(self):
         (payload, error, meta), _, sleeps = self.run_detail(descriptions=['真实短岗位职责' * 8])

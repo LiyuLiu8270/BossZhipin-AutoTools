@@ -1,7 +1,7 @@
 import {createServer} from 'node:http';
 import {timingSafeEqual} from 'node:crypto';
 
-export function createIntakeServer({worker,token,port=17321,onStop=()=>{},webHandler=null}){
+export function createIntakeServer({worker,token,port=17321,onStop=()=>{},webHandler=null,communicationAlerts=()=>({unread:0,latestId:''})}){
   const authorized=req=>{
     if(req.headers.host!==`127.0.0.1:${port}`)return false;
     const origin=req.headers.origin;
@@ -15,7 +15,7 @@ export function createIntakeServer({worker,token,port=17321,onStop=()=>{},webHan
     try{if(webHandler && await webHandler(req,res))return;}catch{req.resume();if(!res.headersSent)reply(500,{error:'service_error'});else res.end();return;}
     if(!authorized(req)){req.resume();return reply(403,{error:'unauthorized'});}
     // No extension intake or permissive CORS. Keep authenticated local health/stop only.
-    if(req.method==='GET'&&req.url==='/health')return reply(200,{ok:true,...worker.status()});
+    if(req.method==='GET'&&req.url==='/health')return reply(200,{ok:true,...worker.status(),communicationAlerts:communicationAlerts()});
     if(req.method==='POST'&&req.url==='/stop'){req.resume();onStop();return reply(200,{ok:true,status:'stopping_after_inflight'});}
     req.resume();return reply(404,{error:'not_found'});
   });

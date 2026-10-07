@@ -27,6 +27,41 @@ function fixture(){
  store.importPayload({schema_version:2,label:'synthetic',exported_at:'2026-09-30T01:00:00Z',jobs:Array.from({length:40},(_,i)=>({id:'boss:perf_'+i,url:`https://www.zhipin.com/job_detail/perf_${i}.html`,title:'产品经理'+i,company:'合成公司',jd:'负责需求分析和产品设计。'.repeat(20),jd_status:'captured_unverified',contact_status:'unknown'}))});
  return {dataDir,store,worker,controller};
 }
+
+test('16路空队列只扫描一次；无关进度不失效，相关表/配置/到期仍立即或有界唤醒',async()=>{
+ const e=fixture(),originalNow=Date.now;let now=originalNow(),greetings=0,matches=0;
+ try{
+  Date.now=()=>now;e.worker.greetingRunner=async()=>{throw Error('unexpected_model');};
+  e.store.db.exec("UPDATE intake_analysis_queue SET state='deferred'");
+  const cg=e.worker.claimGreeting.bind(e.worker),cm=e.worker.claim.bind(e.worker);
+  e.worker.claimGreeting=(...a)=>{greetings++;return cg(...a);};e.worker.claim=(...a)=>{matches++;return cm(...a);};
+  const poll=async()=>{const r=await Promise.all(Array.from({length:16},()=>e.worker.nextStep()));assert.ok(r.every(v=>v.status==='idle'));};
+  await poll();assert.equal(greetings,1);assert.equal(matches,1);
+  e.store.db.exec('CREATE TABLE progress(value TEXT); INSERT INTO progress VALUES(\'changed\')');await poll();assert.equal(greetings,1);
+  const external=new DatabaseSync(join(e.dataDir,'jobs.sqlite'));
+  try{external.exec("UPDATE progress SET value='external'");await poll();assert.equal(greetings,1);
+   external.exec("UPDATE intake_jobs SET body=body WHERE id='boss:perf_0'");await poll();assert.equal(greetings,2);
+  }finally{external.close();}
+  e.worker.policy={...e.worker.policy,greetingStyle:'新风格'};await poll();assert.equal(greetings,3);
+  e.worker.profileHash+='changed';await poll();assert.equal(greetings,4);
+  e.worker.hrActivity={...e.worker.hrActivity,includeUnknown:false};await poll();assert.equal(greetings,5);
+  now+=5000;await poll();assert.equal(greetings,6);assert.equal(matches,6);
+ }finally{Date.now=originalNow;e.store.close();}
+});
+
+test('招呼候选在SQL侧排除完成/失败/运行中/未到期和重试耗尽，统计全集不变',()=>{
+ const e=fixture();try{
+  const now=Date.now(),states=[null,'pending','retry','retry','retry','completed','running','failed'];
+  const rows=e.store.db.prepare('SELECT dataset,id,fingerprint FROM intake_analysis_queue ORDER BY id LIMIT 8').all();
+  rows.forEach((r,i)=>{
+   e.store.db.prepare('INSERT INTO match_runs(dataset,id,fingerprint,profile,state,updated,result) VALUES(?,?,?,?,?,?,?)').run(r.dataset,r.id,r.fingerprint,e.worker.profileHash,'completed',now,JSON.stringify({priority:'可以尝试'}));
+   if(states[i])e.store.db.prepare('INSERT INTO greeting_runs(dataset,id,fingerprint,profile,style,state,attempts,retry_at,updated) VALUES(?,?,?,?,?,?,?,?,?)').run(r.dataset,r.id,r.fingerprint,e.worker.profileHash,e.worker.styleHash,states[i],i===4?3:1,i===3?now+1000:0,now);
+  });
+  assert.equal(e.worker.greetingRows().length,8);
+  assert.deepEqual(e.worker.greetingRows(now).map(r=>r.id).sort(),rows.slice(0,3).map(r=>r.id).sort());
+  assert.equal(e.worker.greetingRows(now+1000).length,4);
+ }finally{e.store.close();}
+});
 test('额度耗尽不扫描统计、不领取、不调用模型；提高额度后重新可执行',async()=>{
  const e=fixture();try{
   e.store.db.prepare('INSERT INTO match_budget VALUES(?,?)').run(e.worker.day(Date.now()),e.worker.dailyLimit);

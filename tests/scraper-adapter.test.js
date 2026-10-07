@@ -15,6 +15,14 @@ const detail=(r=raw(),extra={})=>({job_id:r.job_id,title:r.title,company:r.boss_
 const input=(rows=[raw()],details=[detail(rows[0])],extra={})=>({list:{keyword:'产品经理',city:'深圳',filters:{},filter_desc:[],scraped_at:listAt,total:rows.length,jobs:rows},
  details,label:'测试',timezoneOffset:'+08:00',detailsObservedAt:detailAt,...extra});
 
+test('详情工商主体独立于显示名入库，旧列表保留，变更冲突且不影响人工记录',()=>{
+ const ci={state:'platform_verified',source_kind:'job_detail',source_url:raw().job_link,full_name:'合成有限公司',observed_at:detailAt};
+ const j=adaptScraper(input([raw()],[detail(raw(),{company_identity:ci})])).jobs[0];assert.equal(j.company_identity.full_name,'合成有限公司');assert.equal(j.company,'公司展示名');
+ const old={...j,manual_note:'人工记录'};const listOnly=adaptScraper(input([raw()],[])).jobs[0];assert.equal(mergeScraperJob(old,listOnly).company_identity.full_name,'合成有限公司');
+ const next={...j,company_identity:{...ci,full_name:'另一个有限公司'}};const merged=mergeScraperJob(old,next);assert.equal(merged.company_identity.state,'conflict');assert.equal(merged.manual_note,'人工记录');
+ const wrong=adaptScraper(input([raw()],[detail(raw(),{company_identity:{...ci,source_url:'https://www.zhipin.com/job_detail/other.html'}})])).jobs[0];assert.equal(wrong.company_identity,undefined);
+});
+
 test('波浪号真实结构回归；预处理隔离异常并保留正常行，不覆盖输入',()=>{
  const good=raw('synthetic-id~'),batch=input([good,{...good},null,raw('wrong',{encrypt_job_id:'other'}),raw('bad',{company_link:'broken'}),raw('blank',{title:''}),raw('x'),raw('x',{title:'另一岗位'})],[]).list;
  const before=JSON.stringify(batch),p=prepareScraperList(batch);

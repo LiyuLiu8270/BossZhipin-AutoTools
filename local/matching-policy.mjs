@@ -1,7 +1,7 @@
 import {createHash} from 'node:crypto';
 
 export const MATCHER_VERSION='codex-match-v4-assessment';
-export const GREETER_VERSION='greeting-v1-claims';
+export const GREETER_VERSION='greeting-v2-semantic';
 export const POLICY_LIMITS={matchingSkill:20000,greetingStyle:4000};
 export const GREETING_PRESETS=[
   {id:'concise',name:'简洁直接',text:'用简洁直接的中文，约60–100字。先说明关注的岗位，再用一项最相关的真实经历说明匹配点，最后表达沟通意愿。少用形容词，不复述整份简历，不堆砌技术名词。'},

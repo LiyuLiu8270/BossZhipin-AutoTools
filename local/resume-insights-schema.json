@@ -1,14 +1,16 @@
 {
   "type":"object","additionalProperties":false,
-  "required":["kind","summary","roles","dimensions","strengths","improvements","limitations"],
+  "required":["kind","summary","roles","dimensions","strengths","improvements","limitations","total","score_reason"],
   "properties":{
     "kind":{"type":"string","enum":["roles","score"]},
     "summary":{"type":"string"},
+    "total":{"type":["number","null"],"minimum":0,"maximum":100},
+    "score_reason":{"type":"string"},
     "roles":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["keyword","fit","reason","evidence","gaps"],"properties":{
       "keyword":{"type":"string"},"fit":{"type":"string","enum":["直接匹配","可迁移尝试"]},"reason":{"type":"string"},"gaps":{"type":"array","items":{"type":"string"}},"evidence":{"$ref":"#/$defs/evidence"}
     }}},
-    "dimensions":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["id","score","reason","evidence"],"properties":{
-      "id":{"type":"string","enum":["positioning","ownership","outcomes","coherence","clarity"]},"score":{"type":"integer","minimum":0,"maximum":20},"reason":{"type":"string"},"evidence":{"$ref":"#/$defs/evidence"}
+    "dimensions":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["id","name","score","reason","evidence"],"properties":{
+      "id":{"type":"string"},"name":{"type":"string"},"score":{"type":["number","null"],"minimum":0,"maximum":100},"reason":{"type":"string"},"evidence":{"$ref":"#/$defs/evidence"}
     }}},
     "strengths":{"type":"array","items":{"type":"string"}},
     "improvements":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["issue","action","evidence"],"properties":{"issue":{"type":"string"},"action":{"type":"string"},"evidence":{"$ref":"#/$defs/evidence"}}}},

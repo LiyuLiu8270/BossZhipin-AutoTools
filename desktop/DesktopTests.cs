@@ -10,6 +10,7 @@ namespace Xunxu {
                 if (args[0] == "root") { Console.Write(Program.FindRoot(args[1])); return 0; }
                 var client = new ServiceClient(args[1], int.Parse(args[2]));
                 if (args[0] == "probe") { Console.Write(client.Healthy() ? "healthy" : "unverified"); return 0; }
+                if (args[0] == "alerts") { if (!client.Healthy()) throw new Exception("not_healthy"); Console.Write(client.UnreadAlerts + ":" + client.LatestAlert); return 0; }
                 if (args[0] == "stop") { client.Stop(); Console.Write("stopping"); return 0; }
                 if (args[0] == "start") {
                     using (var child = client.Start()) {

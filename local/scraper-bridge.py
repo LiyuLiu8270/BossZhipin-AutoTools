@@ -175,17 +175,29 @@ def detail_job(module, config, debug=None):
     started = time.monotonic()
     previous, stable, polls, scrolled = None, 0, 0, False
     readiness = {'reason': 'not_observed'}
+    identity = {}
+    actual_address = ''
+    def safe_address(address):
+        try:
+            parsed = urlparse(address or '')
+            return (parsed.scheme + '://' + (parsed.hostname or '') + parsed.path)[:2000] if parsed.hostname else parsed.scheme + ':' + parsed.path[:2000] if parsed.scheme else ''
+        except ValueError:
+            return ''
     def metrics():
-        return {'detail_timing': {'seconds': round(time.monotonic()-started, 3), 'polls': polls, 'lazy_scroll': scrolled}, 'detail_readiness': readiness}
-    def gate(address):
+        return {'detail_timing': {'seconds': round(time.monotonic()-started, 3), 'polls': polls, 'lazy_scroll': scrolled}, 'detail_readiness': readiness, 'detail_identity': identity}
+    def gate(address, stage='page_location'):
+        nonlocal identity
         parsed = urlparse(address or '')
         if any(part in parsed.path for part in ('captcha', 'security', 'verify')):
             return 'verification_required'
         if '/web/user/' in parsed.path or '/login' in parsed.path:
             return 'login_required'
-        if parsed.scheme == 'about':
+        if parsed.scheme == 'about' and stage == 'before_capture_location':
             return 'loading'
         if parsed.scheme != 'https' or parsed.hostname != expected.hostname or parsed.path != expected.path:
+            identity = {'stage': stage, 'expected_url': safe_address(config['job']['job_link']), 'actual_url': safe_address(actual_address), 'observed_url': safe_address(address), 'observed_url_missing': not bool(address), 'poll': polls}
+            if debug:
+                debug.write('detail_identity_mismatch', **identity)
             return 'detail_page_changed'
         return None
     try:
@@ -196,7 +208,8 @@ def detail_job(module, config, debug=None):
         for attempt in range(20):
             time.sleep(1)
             polls += 1
-            before = gate(ws.eval_js('location.href', sid))
+            actual_address = ws.eval_js('location.href', sid)
+            before = gate(actual_address, 'before_capture_location')
             if before == 'loading':
                 stable, previous = 0, None
                 continue
@@ -211,7 +224,8 @@ def detail_job(module, config, debug=None):
                 readiness = {'reason': 'job_unavailable'}
                 if debug:
                     debug.write('detail_probe', poll=polls, **readiness)
-                after = gate(ws.eval_js('location.href', sid))
+                actual_address = ws.eval_js('location.href', sid)
+                after = gate(actual_address, 'after_closed_capture_location')
                 if after:
                     return None, 'detail_page_changed' if after == 'loading' else after, metrics()
                 # A closure is evidence, not a fabricated successful JD. Node
@@ -220,10 +234,11 @@ def detail_job(module, config, debug=None):
             raw = ws.eval_js(module.EXTRACT_DETAIL_JS, sid)
             extracted = json.loads(raw) if isinstance(raw, str) else {}
             # Recheck after both DOM reads: never attribute another job's JD.
-            after = gate(ws.eval_js('location.href', sid))
+            actual_address = ws.eval_js('location.href', sid)
+            after = gate(actual_address, 'after_extract_location')
             if after:
                 return None, 'detail_page_changed' if after == 'loading' else after, metrics()
-            if gate(extracted.get('url')):
+            if gate(extracted.get('url'), 'extracted_url'):
                 return None, 'detail_page_changed', metrics()
             jobs = capture.get('jobs') or []
             readable = False
@@ -234,7 +249,7 @@ def detail_job(module, config, debug=None):
                 # validation, but don't equate its default 120 chars with completeness.
                 fields = module.extract_detail_fields(extracted, min_length=1)
                 readable = capture.get('status') == 'captured' and len(jobs) == 1 and bool(jobs[0].get('title')) and bool(jobs[0].get('jd')) and not jobs[0].get('jd_truncated')
-                if readable and gate(jobs[0].get('url')):
+                if readable and gate(jobs[0].get('url'), 'shared_job_url'):
                     return None, 'detail_page_changed', metrics()
             except module.DetailLoginRequiredError:
                 return None, 'login_required', metrics()
@@ -253,6 +268,8 @@ def detail_job(module, config, debug=None):
                 extracted.update(fields)
                 # Retain the actual detail title for the adapter's conflict check.
                 record = module.build_detail_record({**config['job'], 'title': jobs[0]['title']}, extracted)
+                record['company_identity'] = jobs[0].get('company_identity')
+                record['hiring_party'] = jobs[0].get('hiring_party')
                 return [record], None, metrics()
             if not readable and attempt >= 2 and not scrolled:
                 # Only attempt lazy loading for a missing/invalid description.

@@ -5,12 +5,32 @@ import {createContext,runInContext} from 'node:vm';
 
 // Exercise the shipped handlers with a small synthetic DOM; not visual browser QA.
 const source=readFileSync(new URL('../local/web/app.js',import.meta.url),'utf8');
+test('任务标签互斥显示并保留面板节点，未知标签不改变当前内容',()=>{
+ const panels=['collection','analysis','greeting','research','keywords'].map(key=>({dataset:{taskPanel:key},hidden:false,draft:'未保存'}));
+ const tabs=panels.map(p=>({dataset:{taskTab:p.dataset.taskPanel},attrs:{},setAttribute(k,v){this.attrs[k]=v;}}));
+ const c=createContext({$$:s=>s==='[data-task-panel]'?panels:tabs});
+ runInContext(source.slice(source.indexOf('function showTaskTab('),source.indexOf('function installUsability(')),c);
+ for(const key of panels.map(p=>p.dataset.taskPanel)){
+  runInContext(`showTaskTab('${key}')`,c);
+  assert.deepEqual(panels.filter(p=>!p.hidden).map(p=>p.dataset.taskPanel),[key]);
+  assert.deepEqual(tabs.filter(t=>t.tabIndex===0).map(t=>t.dataset.taskTab),[key]);
+  assert.equal(tabs.filter(t=>t.attrs['aria-selected']==='true').length,1);assert.ok(panels.every(p=>p.draft==='未保存'));
+ }
+ runInContext("showTaskTab('unknown')",c);assert.equal(panels.at(-1).hidden,false);
+});
+test('设置页不再包含自动开关，也不在运行设置提交中覆盖它们',()=>{
+ const html=readFileSync(new URL('../local/web/index.html',import.meta.url),'utf8');
+ assert.doesNotMatch(html,/id="auto-(?:analyze|greeting)"/);
+ const handler=source.split('\n').find(line=>line.startsWith("$('#settings-form').addEventListener('submit'"));
+ assert.doesNotMatch(handler,/autoAnalyze|autoGreeting/);assert.match(handler,/dailyLimit/);assert.match(handler,/hrActivity/);
+ assert.match(html,/id="toggle-analysis"/);assert.match(html,/id="toggle-greeting"/);
+});
 function harness(){
  const nodes=new Map(),node=id=>{if(!nodes.has(id))nodes.set(id,{value:'',disabled:false,textContent:'',attrs:{},setAttribute(k,v){this.attrs[k]=v;}});return nodes.get(id);};
  const metrics=['total','details','job-closed','awaiting','优先沟通','可以尝试','低优先级','不匹配','pending','contacted','waiting'].map(key=>({dataset:{summary:key},attrs:{},setAttribute(k,v){this.attrs[k]=v;},addEventListener(type,handler){this[type]=handler;}}));
  const sandbox={$:id=>node(id),$$:()=>metrics,perform:fn=>fn(),clearTimeout:()=>{},loadJobs:async()=>{sandbox.loads++;},loads:0};
  const context=createContext(sandbox);
- runInContext(source.match(/const listFilters=\[[^;]+;/)[0]+'\nlet page=9,debounce,activeJob=null;\n'+source.slice(source.indexOf('function renderSummary('),source.indexOf('async function loadJobs('))+'\n'+source.slice(source.indexOf('function syncReplyInput('),source.indexOf("$('#action-stage').addEventListener")),context);
+ runInContext(source.match(/const listFilters=\[[^;]+;/)[0]+'\nlet page=9,debounce,activeJob=null,quickView="recommended";\n'+source.slice(source.indexOf('function renderSummary('),source.indexOf('async function loadJobs('))+'\n'+source.slice(source.indexOf('function syncReplyInput('),source.indexOf("$('#action-stage').addEventListener")),context);
  return {node,metrics,sandbox,run:code=>runInContext(code,context)};
 }
 test('概览点击清除其他条件，保留数据集和排序，回到第一页，仅触发列表读取',async()=>{

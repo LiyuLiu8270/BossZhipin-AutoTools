@@ -5,11 +5,11 @@ import {analysisInput} from './intake.mjs';
 import {activityReport} from './activity-display.mjs';
 import {MATCHER_VERSION,runCodex,validateResults} from './codex-runner.mjs';
 import {normalizePolicy,profileFingerprint,greetingFingerprint} from './matching-policy.mjs';
-import {runGreeting,validateGreeting} from './greeting-runner.mjs';
+import {runGreeting} from './greeting-runner.mjs';
 import {appendModelDiagnostic} from './model-diagnostics.mjs';
 import {DEFAULT_HR_ACTIVITY,hrActivityDecision,hrActivityQueueState} from './hr-activity-policy.mjs';
 import {codexRuntimeStatus} from './codex-executable.mjs';
-import {cachedRead,databaseRevision,trackReadTables} from './read-cache.mjs';
+import {cachedRead,tableRevision,trackReadTables} from './read-cache.mjs';
 
 export class MatchWorker {
   constructor(store,profile,{dataDir,runner=runCodex,greetingRunner=runGreeting,dailyLimit=200,runtimeStatus=codexRuntimeStatus}={}){
@@ -40,7 +40,7 @@ export class MatchWorker {
     if(!this._activityCache.has(job))this._activityCache.set(job,hrActivityDecision(job,this.hrActivity));
     return this._activityCache.get(job);
   }
-  queueState(state,job){return hrActivityQueueState(state,this.activityDecision(job));}
+  queueState(state,job){const decision=this.activityDecision(job);return state==='requested'&&!decision.allowed?'activity_skipped':hrActivityQueueState(state,decision);}
   taskDiagnostic(stage,rows){
     const context={requestId:randomUUID(),stage},cwd=join(this.dataDir,'codex-work');
     const log=(outcome,error=null)=>{try{return appendModelDiagnostic(cwd,{event:'task_result',request_id:context.requestId,stage,outcome,error,
@@ -49,18 +49,68 @@ export class MatchWorker {
   }
   pruneGreetings(profile=this.profileHash,style=this.styleHash){return this.db.prepare(`DELETE FROM greeting_runs WHERE profile<>? OR style<>? OR NOT EXISTS
     (SELECT 1 FROM intake_analysis_queue q WHERE q.dataset=greeting_runs.dataset AND q.id=greeting_runs.id AND q.fingerprint=greeting_runs.fingerprint AND q.state!='deferred')`).run(profile,style).changes;}
-  greetingRows(){return this.db.prepare(`SELECT m.dataset,m.id,m.fingerprint,m.profile,m.result AS assessment,j.body,
-    COALESCE(g.state,'pending') AS state,g.result,g.error,g.retry_at,g.attempts
+  greetingRows(readyAt=null,automatic=true,allPriorities=false){return this.db.prepare(`SELECT m.dataset,m.id,m.fingerprint,m.profile,m.result AS assessment,j.body,
+    COALESCE(g.state,'pending') AS state,g.result,g.error,g.retry_at,g.attempts,g.updated
     FROM match_runs m JOIN intake_analysis_queue q USING(dataset,id,fingerprint) JOIN intake_jobs j USING(dataset,id)
     LEFT JOIN greeting_runs g ON g.dataset=m.dataset AND g.id=m.id AND g.fingerprint=m.fingerprint AND g.profile=m.profile AND g.style=?
-    WHERE m.profile=? AND m.state='completed' AND q.state!='deferred' AND json_extract(m.result,'$.priority') IN ('优先沟通','可以尝试')`).all(this.styleHash,this.profileHash);}
+    WHERE m.profile=? AND m.state='completed' AND q.state!='deferred'
+    ${allPriorities?'':"AND (json_extract(m.result,'$.priority') IN ('优先沟通','可以尝试') OR g.state IS NOT NULL)"}
+    ${readyAt===null?'':automatic?"AND (g.state IS NULL OR g.state IN ('pending','requested') OR (g.state='retry' AND g.retry_at<=? AND g.attempts<3))":"AND g.state='requested'"}
+    ORDER BY CASE WHEN g.state='requested' THEN 0 ELSE 1 END`).all(this.styleHash,this.profileHash,...(readyAt===null||!automatic?[]:[readyAt]));}
+  hasRequestedGreeting(){return !!this.db.prepare("SELECT 1 FROM greeting_runs g JOIN intake_analysis_queue q USING(dataset,id,fingerprint) WHERE g.state='requested' AND g.profile=? AND g.style=? AND q.state!='deferred' LIMIT 1").get(this.profileHash,this.styleHash);}
+  requestGreeting(dataset,id){
+    const row=this.greetingRows().find(r=>r.dataset===dataset&&r.id===id);
+    if(!row||!this.activityDecision(JSON.parse(row.body)).allowed)throw new Error('greeting_not_eligible');
+    if(row.state==='running')throw new Error('greeting_busy');
+    if(row.state==='requested')return {status:'queued',alreadyQueued:true};
+    this.enqueueGreetingRow(row);
+    return {status:'queued',alreadyQueued:false};
+  }
+  enqueueGreetingRow(row){
+    // Retain the previous validated draft until a replacement succeeds.
+    this.db.prepare(`INSERT INTO greeting_runs(dataset,id,fingerprint,profile,style,state,attempts,retry_at,updated)
+      VALUES(?,?,?,?,?,'requested',0,0,?) ON CONFLICT(dataset,id,fingerprint,profile,style) DO UPDATE SET
+      state='requested',attempts=0,lease=NULL,retry_at=0,error=NULL,updated=excluded.updated`)
+      .run(row.dataset,row.id,row.fingerprint,this.profileHash,this.styleHash,Date.now());
+  }
+  bulkGreetingPlan(value){
+    const allowed=['优先沟通','可以尝试','低优先级','不匹配'];
+    if(!value||!Array.isArray(value.priorities)||!value.priorities.length||value.priorities.length>4||value.priorities.some(p=>!allowed.includes(p))||
+      (value.dataset!==undefined&&value.dataset!==null&&(typeof value.dataset!=='string'||!value.dataset.trim()||value.dataset.length>80))||
+      (value.includeContacted!==undefined&&typeof value.includeContacted!=='boolean'))throw new Error('invalid_greeting_scope');
+    const scope={priorities:allowed.filter(p=>value.priorities.includes(p)),dataset:value.dataset||null,includeContacted:value.includeContacted===true};
+    const stats={selected:0,queueable:0,running:0,alreadyQueued:0,activitySkipped:0,contactedSkipped:0};
+    const byPriority=Object.fromEntries(scope.priorities.map(p=>[p,0])),rows=[];
+    const contacts=new Map(this.db.prepare('SELECT dataset,id,status FROM manual_contact').all().map(r=>[JSON.stringify([r.dataset,r.id]),r.status]));
+    for(const row of this.greetingRows(null,true,true)){
+      const priority=JSON.parse(row.assessment).priority;if(!scope.priorities.includes(priority)||(scope.dataset&&row.dataset!==scope.dataset))continue;
+      stats.selected++;const job=JSON.parse(row.body);
+      if(!scope.includeContacted&&(contacts.get(JSON.stringify([row.dataset,row.id]))||job.contact_status)==='contacted'){stats.contactedSkipped++;continue;}
+      if(!this.activityDecision(job).allowed){stats.activitySkipped++;continue;}
+      if(row.state==='running'){stats.running++;continue;}
+      if(row.state==='requested'){stats.alreadyQueued++;continue;}
+      rows.push(row);stats.queueable++;byPriority[priority]++;
+    }
+    rows.sort((a,b)=>JSON.stringify([a.dataset,a.id]).localeCompare(JSON.stringify([b.dataset,b.id])));
+    const token=createHash('sha256').update(JSON.stringify({scope,profile:this.profileHash,style:this.styleHash,rows:rows.map(r=>[r.dataset,r.id,r.fingerprint,r.state,r.updated||0])})).digest('hex');
+    return {scope,stats,byPriority,token,rows};
+  }
+  requestBulkGreetings(value){
+    this.db.exec('BEGIN IMMEDIATE');
+    try{
+      const plan=this.bulkGreetingPlan(value);
+      if(value.token!==plan.token)throw new Error('greeting_scope_changed');
+      for(const row of plan.rows)this.enqueueGreetingRow(row);
+      this.db.exec('COMMIT');const {rows,...summary}=plan;return {...summary,status:'queued',queued:rows.length};
+    }catch(e){this.db.exec('ROLLBACK');throw e;}
+  }
   greetingFor(dataset,id,fingerprint){return this.db.prepare('SELECT state,result,error FROM greeting_runs WHERE dataset=? AND id=? AND fingerprint=? AND profile=? AND style=?').get(dataset,id,fingerprint,this.profileHash,this.styleHash);}
-  claimGreeting(now=Date.now()){
+  claimGreeting(now=Date.now(),automatic=true,kind=null){
     this.db.exec('BEGIN IMMEDIATE');
     try{
       this.db.prepare("UPDATE greeting_runs SET state=CASE WHEN attempts>=3 THEN 'failed' ELSE 'retry' END,lease=NULL,error='lease_expired' WHERE state='running' AND retry_at<=?").run(now);
       const budget=this.db.prepare('SELECT jobs FROM match_budget WHERE day=?').get(this.day(now))?.jobs||0;
-      const row=budget<this.dailyLimit?this.greetingRows().find(r=>(r.state==='pending'||r.state==='retry'&&r.retry_at<=now&&r.attempts<3)&&this.activityDecision(JSON.parse(r.body)).allowed):null;
+      const row=budget<this.dailyLimit?this.greetingRows(now,automatic).find(r=>(kind!=='greeting'||r.state!=='requested')&&this.activityDecision(JSON.parse(r.body)).allowed):null;
       const lease=randomUUID();
       if(row){
         this.db.prepare(`INSERT INTO greeting_runs(dataset,id,fingerprint,profile,style,state,attempts,lease,retry_at,updated)
@@ -72,30 +122,53 @@ export class MatchWorker {
     }catch(e){this.db.exec('ROLLBACK');throw e;}
   }
   budgetAvailable(){return (this.db.prepare('SELECT jobs FROM match_budget WHERE day=?').get(this.day(Date.now()))?.jobs||0)<this.dailyLimit;}
-  async nextStep(){
+  stageReady(kind,now=Date.now()){
+    if(!this.budgetAvailable()||this.profile.mode==='resume_missing'||this.runtimeStatus().available===false)return false;
+    const key=this.queueRevision()+'|'+kind+'|'+Math.floor(now/1000);
+    if(this._stageReady?.has(key))return this._stageReady.get(key);
+    let ready;
+    if(kind==='matching')ready=this.matchingCandidates(now).some(r=>this.activityDecision(JSON.parse(r.body)).allowed);
+    else ready=this.greetingRows(now,kind!=='manual_greeting').some(r=>(kind!=='greeting'||r.state!=='requested')&&this.activityDecision(JSON.parse(r.body)).allowed)||
+      kind==='greeting'&&!!this.db.prepare("SELECT 1 FROM greeting_runs WHERE profile=? AND style=? AND state='running' AND retry_at<=? LIMIT 1").get(this.profileHash,this.styleHash,now);
+    if(!this._stageReady||this._stageReady.size>12)this._stageReady=new Map();this._stageReady.set(key,ready);return ready;
+  }
+  async runStage(kind){
+    if(kind==='matching'){const claim=this.claim(1);return claim.rows.length?this.step(1,claim):{status:'idle'};}
+    const claim=this.claimGreeting(Date.now(),kind!=='manual_greeting',kind);return claim.row?this.greetingStep(claim):{status:'idle'};
+  }
+  queueRevision(){return [tableRevision(this.db,['intake_jobs','intake_analysis_queue','match_runs','greeting_runs']),this.profileHash,this.styleHash,JSON.stringify(this.hrActivity)].join('|');}
+  async nextStep({matching=true,greeting=true}={}){
     if(!this.budgetAvailable())return {status:'idle',reason:'daily_limit'};
-    const key=[databaseRevision(this.db),this.profileHash,this.styleHash,JSON.stringify(this.hrActivity)].join('|');
+    const key=this.queueRevision()+'|'+matching+'|'+greeting;
     if(this._idleKey===key&&this._idleUntil>Date.now())return {status:'idle'};
-    const greeting=await this.greetingStep(),result=greeting.status==='idle'?await this.step(1):greeting;
-    if(result.status==='idle'){this._idleKey=[databaseRevision(this.db),this.profileHash,this.styleHash,JSON.stringify(this.hrActivity)].join('|');this._idleUntil=Date.now()+5000;}
-    return result;
+    if(this.profile.mode==='resume_missing')return {status:'paused',reason:'resume_required'};
+    if((greeting||this.hasRequestedGreeting())&&this.greetingRunner===runGreeting&&!this.runtimeStatus().available)return {status:'paused',reason:'codex_binary_unavailable'};
+    // Claim both stages synchronously before yielding. Other permits see the
+    // lease or empty-queue snapshot immediately, not after 16 duplicate scans.
+    const greetingClaim=this.claimGreeting(Date.now(),greeting);
+    if(greetingClaim.row)return this.greetingStep(greetingClaim);
+    if(matching&&this.runner===runCodex&&!this.runtimeStatus().available)return {status:'paused',reason:'codex_binary_unavailable'};
+    const matchingClaim=matching?this.claim(1):{rows:[]};
+    if(matchingClaim.rows.length)return this.step(1,matchingClaim);
+    this._idleKey=this.queueRevision()+'|'+matching+'|'+greeting;this._idleUntil=Date.now()+5000;
+    return {status:'idle'};
   }
   scheduleReport(){
     this._reportDirty=true;if(this._reportTimer)return;
     this._reportTimer=setTimeout(()=>{this._reportTimer=null;this.flushReport();},30000);this._reportTimer.unref?.();
   }
   flushReport(){clearTimeout(this._reportTimer);this._reportTimer=null;if(!this._reportDirty)return;try{this.render();}catch{process.stderr.write('report_write_failed\n');}}
-  async greetingStep(){
+  async greetingStep(claimed=null){
     if(this.profile.mode==='resume_missing')return {status:'paused'};
-    if(this.greetingRunner===runGreeting&&!this.runtimeStatus().available)return {status:'paused',reason:'codex_binary_unavailable'};
+    if(!claimed&&this.greetingRunner===runGreeting&&!this.runtimeStatus().available)return {status:'paused',reason:'codex_binary_unavailable'};
     const profile=structuredClone(this.profile),policy=structuredClone(this.policy),profileHash=this.profileHash,style=this.styleHash;
-    const {row,lease}=this.claimGreeting();if(!row)return {status:'idle'};
+    const {row,lease}=claimed||this.claimGreeting();if(!row)return {status:'idle'};
     const diagnostic=this.taskDiagnostic('greeting',[row]);
     this.activeStages.greeting++;
     try{
       const response=await this.greetingRunner(profile,analysisInput(JSON.parse(row.body)),JSON.parse(row.assessment),{cwd:join(this.dataDir,'codex-work'),policy,diagnosticContext:diagnostic.context});
       if(profileHash!==this.profileHash||style!==this.styleHash||!this.db.prepare("SELECT 1 FROM greeting_runs WHERE lease=? AND state='running'").get(lease))return {status:'superseded',stage:'greeting'};
-      const result=validateGreeting(response.output,profile);
+      const result=response.output;
       this.db.prepare("UPDATE greeting_runs SET state='completed',lease=NULL,error=NULL,result=?,usage=?,updated=? WHERE lease=?").run(JSON.stringify(result),JSON.stringify(response.usage||null),Date.now(),lease);
       diagnostic.log('completed');
       this.scheduleReport();
@@ -108,18 +181,21 @@ export class MatchWorker {
       return {status:'failed',stage:'greeting',code,count:1};
     }finally{this.activeStages.greeting--;}
   }
+  matchingCandidates(now=Date.now()){
+    return this.db.prepare(`SELECT q.*,j.body FROM intake_analysis_queue q JOIN intake_jobs j USING(dataset,id)
+      LEFT JOIN match_runs m ON m.dataset=q.dataset AND m.id=q.id AND m.fingerprint=q.fingerprint AND m.profile=?
+      WHERE q.state!='deferred' AND (m.state IS NULL OR m.state='pending' OR (m.state='retry' AND m.retry_at<=? AND m.attempts<3) OR (m.state='running' AND m.retry_at<=?))
+      ORDER BY CASE WHEN json_type(j.body,'$.scraper_source') IS NOT NULL THEN 0 ELSE 1 END,
+        CASE WHEN json_extract(j.body,'$.title') LIKE '%SaaS%' OR json_extract(j.body,'$.title') LIKE '%B端%' THEN 0
+        WHEN json_extract(j.body,'$.title') LIKE '%产品%' THEN 1 ELSE 2 END, j.exported_at DESC,q.id`).all(this.profileHash,now,now);
+  }
   claim(limit=3,now=Date.now()){
     this.db.exec('BEGIN IMMEDIATE');
     try{
       this.db.prepare("UPDATE match_runs SET state=CASE WHEN attempts>=3 THEN 'failed' ELSE 'retry' END,lease=NULL,error='lease_expired',retry_at=? WHERE state='running' AND retry_at<=?").run(now,now);
       const budget=this.db.prepare('SELECT jobs FROM match_budget WHERE day=?').get(this.day(now))?.jobs||0;
       limit=Math.max(0,Math.min(limit,this.dailyLimit-budget));
-      const rows=limit?this.db.prepare(`SELECT q.*,j.body FROM intake_analysis_queue q JOIN intake_jobs j USING(dataset,id)
-        LEFT JOIN match_runs m ON m.dataset=q.dataset AND m.id=q.id AND m.fingerprint=q.fingerprint AND m.profile=?
-        WHERE q.state!='deferred' AND (m.state IS NULL OR m.state='pending' OR (m.state='retry' AND m.retry_at<=? AND m.attempts<3))
-        ORDER BY CASE WHEN json_type(j.body,'$.scraper_source') IS NOT NULL THEN 0 ELSE 1 END,
-          CASE WHEN json_extract(j.body,'$.title') LIKE '%SaaS%' OR json_extract(j.body,'$.title') LIKE '%B端%' THEN 0
-          WHEN json_extract(j.body,'$.title') LIKE '%产品%' THEN 1 ELSE 2 END, j.exported_at DESC,q.id`).all(this.profileHash,now)
+      const rows=limit?this.matchingCandidates(now)
         .filter(r=>this.activityDecision(JSON.parse(r.body)).allowed).slice(0,limit):[];
       const lease=randomUUID();
       for(const r of rows)this.db.prepare(`INSERT INTO match_runs(dataset,id,fingerprint,profile,state,attempts,lease,retry_at,updated)
@@ -129,12 +205,12 @@ export class MatchWorker {
       this.db.exec('COMMIT');return {lease,rows};
     }catch(e){this.db.exec('ROLLBACK');throw e;}
   }
-  async step(limit=3){
+  async step(limit=3,claimed=null){
     if(this.profile.mode==='resume_missing')return {status:'paused',reason:'resume_required',...this.status()};
-    if(this.runner===runCodex&&!this.runtimeStatus().available)return {status:'paused',reason:'codex_binary_unavailable',...this.status()};
+    if(!claimed&&this.runner===runCodex&&!this.runtimeStatus().available)return {status:'paused',reason:'codex_binary_unavailable',...this.status()};
     // Settings can change while the runner awaits: bind this batch to its snapshot.
     const profile=structuredClone(this.profile),policy=structuredClone(this.policy),profileHash=this.profileHash;
-    const {lease,rows}=this.claim(limit);
+    const {lease,rows}=claimed||this.claim(limit);
     if(!rows.length)return {status:'idle'};
     const diagnostic=this.taskDiagnostic('matching',rows);
     // BOSS ids may repeat across user datasets. Give each request a unique local
@@ -208,7 +284,7 @@ export class MatchWorker {
       JOIN intake_analysis_queue q ON q.dataset=m.dataset AND q.id=m.id AND q.fingerprint=m.fingerprint
       JOIN intake_jobs j ON j.dataset=m.dataset AND j.id=m.id LEFT JOIN manual_contact c ON c.dataset=m.dataset AND c.id=m.id
       WHERE m.state='completed' AND m.profile=? AND q.state!='deferred'`).all(this.profileHash);
-    const jobs=rows.map(r=>{const result=JSON.parse(r.result),g=this.greetingFor(r.dataset,r.id,r.fingerprint),job=JSON.parse(r.body);return {dataset:r.dataset,job,...result,...(g?.state==='completed'?JSON.parse(g.result):{}),greeting_state:this.queueState(g?.state||(['优先沟通','可以尝试'].includes(result.priority)?'pending':'not_required'),job),activity_gate:this.activityDecision(job),contact_status:r.manual_status||job.contact_status||'unknown',analyzed_at:new Date(r.updated).toISOString()};})
+    const jobs=rows.map(r=>{const result=JSON.parse(r.result),g=this.greetingFor(r.dataset,r.id,r.fingerprint),job=JSON.parse(r.body);return {dataset:r.dataset,job,...result,...(g?.result?JSON.parse(g.result):{}),greeting_state:this.queueState(g?.state||(['优先沟通','可以尝试'].includes(result.priority)?'pending':'not_required'),job),activity_gate:this.activityDecision(job),contact_status:r.manual_status||job.contact_status||'unknown',analyzed_at:new Date(r.updated).toISOString()};})
       .sort((a,b)=>Number(a.contact_status==='contacted')-Number(b.contact_status==='contacted')||order[a.priority]-order[b.priority]||b.analyzed_at.localeCompare(a.analyzed_at));
     const status=this.status(), keywords=[...new Set(jobs.filter(j=>['优先沟通','可以尝试'].includes(j.priority)).flatMap(j=>j.keywords))];
     const data={generated_at:new Date().toISOString(),profile:this.profileHash,engine:MATCHER_VERSION,status,keyword_suggestions:keywords,notice:'模型建议非录用概率；引文与事实ID经过程序校验，但不保证推理无误。打招呼草稿未发送。关键词需人工确认。沟通状态未知时请先核对BOSS消息，勿重复打招呼。',jobs};

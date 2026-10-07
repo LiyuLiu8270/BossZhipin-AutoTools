@@ -1,7 +1,7 @@
 import {signalSnapshot, mergeSignals, signalPages, SIGNAL_FIELDS} from './signals.js';
 import {compareTitles, displayJD} from './text-rules.js';
 import {hiringParty, applyHiringParty, isCompanyExempt} from './hiring-party.js';
-export const VERSION = '0.13.0';
+export const VERSION = '1.7.0';
 export const clean = value => String(value ?? '').replace(/\r\n/g, '\n').replace(/[ \t]+/g, ' ').trim();
 const encoding = /[\uE000-\uF8FF\u{F0000}-\u{FFFFD}\u{100000}-\u{10FFFD}]/u;
 export function classifyJD(value, truncated = false) {

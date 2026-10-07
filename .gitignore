@@ -1,6 +1,8 @@
 # Private user data and credentials
 /local/data/
 /local/candidate.json
+# Local acceptance diaries may reference private resumes and production records.
+/docs/验收-*.md
 /runtime/
 .env
 .env.*

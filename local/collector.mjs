@@ -16,6 +16,8 @@ import {pythonPath,browserProfile} from './runtime-paths.mjs';
 
 const defaults={enabled:false,intervalMinutes:360,city:'101280600',dataset:'我的求职',pages:2,dailyDetailLimit:30,nextRun:null,blocked:null};
 const gates=detailGates;
+const detailIdentityErrors=new Set(['detail_page_changed','scraper_detail_identity_conflict','scraper_orphan_detail','scraper_detail_invalid_url','scraper_detail_duplicate_identity']);
+const diagnosticUrl=value=>{try{const u=new URL(value);return u.origin+u.pathname;}catch{return '';}};
 export const searchBudgetSeconds=pages=>60+60*Math.max(1,Math.min(20,Number(pages)||1));
 export async function ensureCollectorBrowser(){
   const ready=async()=>{try {const r=await fetch('http://127.0.0.1:19222/json/version',{signal:AbortSignal.timeout(2000)});return r.ok;}catch{return false;}};
@@ -207,10 +209,14 @@ export class Collector {
         if(detailState(saved,row,this.now())!=='pending'){run.detailIndex=detailIndex+1;checkpoint();continue;}
         operation='detail_pacing';await pace(signal);checkpoint();
         operation='detail_read';
-        const result=await this.readDetail('detail',{job:raw,expression:`JSON.stringify((${collectPage.toString()})())`},{directory,signal,timeoutMs:45000});checkpoint();
+        let result;
+        try{result=await this.readDetail('detail',{job:raw,expression:`JSON.stringify((${collectPage.toString()})())`},{directory,signal,timeoutMs:45000});}
+        catch(e){if(!detailIdentityErrors.has(e.message))throw e;result={ok:false,error:e.message,debugFile:e.debugFile};}
+        checkpoint();
         const readiness=result.detail_readiness?.reason;
-        trace('detail_result',{id:row.id,ok:result.ok,error:result.error||null,debug_file:result.debugFile||null,...(['not_observed','job_unavailable','shared_not_captured','title_missing','jd_missing','jd_truncated','upstream_parse_failed','page_loading','ready','not_readable'].includes(readiness)?{readiness}:{})});
+        trace('detail_result',{id:row.id,attempt:row.attempts+1,expected_url:diagnosticUrl(raw.job_link),ok:result.ok,error:result.error||null,debug_file:result.debugFile||null,identity:result.detail_identity||null,...(['not_observed','job_unavailable','shared_not_captured','title_missing','jd_missing','jd_truncated','upstream_parse_failed','page_loading','ready','not_readable'].includes(readiness)?{readiness}:{})});
         operation='detail_import';let validationReason;
+        try{
         if(result.ok&&result.payload?.status==='job_unavailable'){
           const capture=result.payload,current=this.store.get(config.dataset,row.id);
           if(jobIdentity(capture.source_url)?.id!==row.id||capture.jobs?.length!==1||jobIdentity(capture.jobs[0].url)?.id!==row.id)throw new Error('detail_page_changed');
@@ -220,17 +226,26 @@ export class Collector {
           run.unavailable=(run.unavailable||0)+1;this.db.prepare('DELETE FROM collection_details WHERE dataset=? AND id=?').run(config.dataset,row.id);
           trace('detail_unavailable',{id:row.id});
         }else if(result.ok&&result.payload?.length){
+          if(!Array.isArray(result.payload)||result.payload.length!==1||jobIdentity(result.payload[0].job_link||result.payload[0].url)?.id!==row.id)throw new Error('detail_page_changed');
           const received=this.store.importScraper({list:entry.list,details:result.payload,label:config.dataset,timezoneOffset:'+08:00',observationId:entry.observationId,detailsObservedAt:result.observed_at});
           const savedResult=this.store.get(config.dataset,row.id);
           if(!readableJD(savedResult)){result.ok=false;validationReason=!savedResult.jd?'jd_missing':qualityOf(savedResult).includes('jd_encoded_font')?'jd_encoded_font':savedResult.jd_truncated?'jd_truncated':'jd_content_rejected';}
           else{run.details++;run.updated+=received.updated||0;this.db.prepare('DELETE FROM collection_details WHERE dataset=? AND id=?').run(config.dataset,row.id);}
           trace('detail_validation',{id:row.id,accepted:result.ok,reason:validationReason||'accepted',jd_status:savedResult.jd_status,jd_chars:savedResult.jd.length});
         }else result.ok=false;
+        }catch(e){
+          if(!detailIdentityErrors.has(e.message))throw e;
+          result.ok=false;result.error=e.message;validationReason=e.message;
+          trace('detail_identity_rejected',{id:row.id,stage:operation,expected_url:diagnosticUrl(raw.job_link),actual_url:diagnosticUrl(result.payload?.source_url||result.payload?.[0]?.job_link||result.payload?.[0]?.url),captured_job_url:diagnosticUrl(result.payload?.jobs?.[0]?.url),error:e.message});
+        }
         if(!result.ok){
           if(gates.has(result.error))throw new Error(result.error);
           run.failedDetails++;
           run.failureReasons||={};const reason=validationReason||(['shared_not_captured','title_missing','jd_missing','jd_truncated','upstream_parse_failed','page_loading'].includes(readiness)?readiness:result.error||'detail_not_readable');run.failureReasons[reason]=(run.failureReasons[reason]||0)+1;
-          this.db.prepare('UPDATE collection_details SET attempts=attempts+1,state=?,retry_at=? WHERE dataset=? AND id=?').run(row.attempts>=2?'review':'pending',this.now()+3600000,config.dataset,row.id);
+          const nextState=row.attempts>=2?'review':'pending';
+          const detailFailure={reason,attempt:row.attempts+1,at:this.now(),debugFile:result.debugFile||null,identity:result.detail_identity||null};
+          this.db.prepare('UPDATE collection_details SET attempts=attempts+1,state=?,retry_at=?,body=? WHERE dataset=? AND id=?').run(nextState,this.now()+3600000,JSON.stringify({...entry,detailFailure}),config.dataset,row.id);
+          trace('detail_deferred',{id:row.id,error:reason,attempt:row.attempts+1,state:nextState,next_cursor:detailIndex+1});
         }
         // Persist the next cursor together with completed counters. A gate above
         // leaves the current item untouched and consumes no failure attempt.

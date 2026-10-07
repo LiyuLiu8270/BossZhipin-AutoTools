@@ -42,8 +42,26 @@ test('无关闭证据和错岗位的关闭结果不得使岗位失效',async()=>
  for(const wrong of [false,true]){
   const url=wrong?'https://www.zhipin.com/job_detail/other.html':raw.job_link;
   const env=setup({runner:async mode=>mode==='list'?{ok:true,payload:list}:{ok:true,payload:{status:'job_unavailable',source_url:url,jobs:[{url,recruitment_signals:{}}]}}});env.collector.detailIntervalMs=0;
-  try{env.collector.start();await env.collector.promise;assert.equal(env.collector.latest().error,wrong?'detail_page_changed':'detail_unavailable_evidence_invalid');assert.notEqual(env.store.get(env.collector.config.dataset,'boss:abc').recruitment_signals.availability.value,'explicit_unavailable');assert.equal(env.collector.status().backlog[0].count,1);}finally{await env.cleanup();}
+  try{env.collector.start();await env.collector.promise;assert.equal(env.collector.latest().error,wrong?null:'detail_unavailable_evidence_invalid');if(wrong)assert.equal(env.collector.latest().failureReasons.detail_page_changed,1);assert.notEqual(env.store.get(env.collector.config.dataset,'boss:abc').recruitment_signals.availability.value,'explicit_unavailable');assert.equal(env.collector.status().backlog[0].count,1);}finally{await env.cleanup();}
  }
+});
+
+test('单岗位身份异常不全局暂停、不写错JD；累计三次转待复查，后续岗位继续',async()=>{
+ let now=Date.now(),badCalls=0,goodCalls=0;
+ const jobs=['bad','good'].map(id=>({...raw,encrypt_job_id:id,job_link:`https://www.zhipin.com/job_detail/${id}.html`}));
+ const env=setup({now:()=>now,runner:async(mode,input)=>{
+  if(mode==='list')return {ok:true,payload:{...list,jobs}};
+  if(input.job.encrypt_job_id==='bad'){badCalls++;return {ok:false,error:'detail_page_changed',detail_identity:{stage:'extracted_url',expected_url:input.job.job_link,actual_url:input.job.job_link,observed_url:'',observed_url_missing:true}};}
+  goodCalls++;return {ok:true,payload:[{...input.job,jd:'真实完整职责，负责需求分析和产品交付。'.repeat(30)}]};
+ }});env.collector.detailIntervalMs=0;
+ try{
+  env.collector.start();await env.collector.promise;
+  assert.equal(env.collector.latest().state,'partial');assert.equal(env.collector.latest().detailIndex,2);assert.equal(env.collector.config.blocked,null);assert.equal(goodCalls,1);
+  assert.equal(env.store.get(env.collector.config.dataset,'boss:bad').jd,'');assert.ok(env.store.get(env.collector.config.dataset,'boss:good').jd);
+  for(let i=0;i<2;i++){now+=3600001;env.collector.startDetails();await env.collector.promise;}
+  const row=env.store.db.prepare('SELECT * FROM collection_details WHERE id=?').get('boss:bad');assert.equal(row.state,'review');assert.equal(row.attempts,3);assert.equal(JSON.parse(row.body).detailFailure.identity.stage,'extracted_url');
+  now+=3600001;env.collector.startDetails();await env.collector.promise;assert.equal(badCalls,3);assert.equal(goodCalls,1);
+ }finally{await env.cleanup();}
 });
 
 test('详情门禁恢复保留游标、失败次数与每日累计额度，已完成搜索不重跑',async()=>{
