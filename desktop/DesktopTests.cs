@@ -10,10 +10,11 @@ namespace Xunxu {
                 if (args[0] == "root") { Console.Write(Program.FindRoot(args[1])); return 0; }
                 if (args[0] == "node-selection") {
                     int checks = 0;
-                    string selected = ServiceClient.FindNode(new[] { "relative.exe", args[1], args[1].ToUpperInvariant(), args[2] }, delegate(string path) { checks++; return path == args[2]; });
-                    if (selected != args[2] || checks != 2) throw new Exception("node_selection_failed");
-                    selected = ServiceClient.FindNode(new[] { args[1], args[2] }, delegate(string path) { if (path == args[1]) throw new Exception("broken_candidate"); return true; });
-                    if (selected != args[2]) throw new Exception("node_fallback_failed");
+                    string rejectedNode = System.IO.Path.GetFullPath(args[1]), currentNode = System.IO.Path.GetFullPath(args[2]);
+                    string selected = ServiceClient.FindNode(new[] { "relative.exe", args[1], args[1].ToUpperInvariant(), args[2] }, delegate(string path) { checks++; return String.Equals(path, currentNode, StringComparison.OrdinalIgnoreCase); });
+                    if (!String.Equals(selected, currentNode, StringComparison.OrdinalIgnoreCase) || checks != 2) throw new Exception("node_selection_failed");
+                    selected = ServiceClient.FindNode(new[] { args[1], args[2] }, delegate(string path) { if (String.Equals(path, rejectedNode, StringComparison.OrdinalIgnoreCase)) throw new Exception("broken_candidate"); return true; });
+                    if (!String.Equals(selected, currentNode, StringComparison.OrdinalIgnoreCase)) throw new Exception("node_fallback_failed");
                     bool rejected = false;
                     try { ServiceClient.FindNode(new[] { args[1] }, delegate(string path) { return false; }); } catch (InvalidOperationException) { rejected = true; }
                     if (!rejected || !ServiceClient.SupportedNode(args[2])) throw new Exception("node_version_check_failed");
